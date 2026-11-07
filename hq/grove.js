@@ -10,10 +10,11 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import {
   KOALAS, ITEMS, BLUEPRINTS, PLOTS, LANDS, placesOf, landOf, newKoala, friendOf, RENAMED, migrateNames, SIGHTINGS, parseDecision, applyDecision, drift, groveClock, DAY_MS, buildPrompt, systemPrompt, canReadAt, growthOf, carryLimit,
-  wisdomOf, relevantLearned, interestsOf, MAX_LEARNED, MAX_CURIOSITIES,
+  wisdomOf, relevantLearned, interestsOf, MAX_LEARNED, MAX_CURIOSITIES, MAX_TRAITS,
 } from './grove-world.js';
 import { koalaArgs, researchArgs, readArgs, think as callClaude } from './grove-brain.js';
 import { instinctDecide, instinctRead } from './grove-instinct.js';
+import { createLocalLlm } from './grove-local-llm.js';
 import { RESOURCES, ISLANDS, COSTS, START_STOCK, held, bridged, stockOf } from './grove-economy.js';
 import { BABY_NAMES, babyPersona, bornBaby, graduates } from './grove-family.js';
 import { designCost } from './grove-design.js';
@@ -30,6 +31,8 @@ export const GROVE_DEFAULTS = {
   hybridEvery: 4,
   localReadsPerDay: 48, // books read on instinct cost nothing, but a day has only so many pages
   autoStart: false, // wake a fresh grove on start when the brain needs no tokens
+  ollamaUrl: '', // a local model (Ollama) for new library pages and nightly diaries; '' is off
+  ollamaModel: '', // '' picks a good installed one
   model: 'claude-haiku-5-5',
   callUsd: 0.05, // --max-budget-usd for one decision
   dayUsd: 0.5, // no new calls once today's real spend reaches this
@@ -81,11 +84,14 @@ export class Grove {
   #wasPresent = false;
   #failures = 0;
 
-  constructor({ path = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random } = {}) {
+  constructor({ path = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random, localLlm = undefined } = {}) {
     this.config = { ...GROVE_DEFAULTS, ...config };
     this.now = now;
     this.rng = rng;
     this.brain = think ?? ((req) => this.#callClaude(req));
+    // free learning on this computer: new pages and diaries (null when not configured)
+    this.localLlm = localLlm !== undefined ? localLlm
+      : this.config.ollamaUrl ? createLocalLlm({ url: this.config.ollamaUrl, model: this.config.ollamaModel, now }) : null;
 
     const db = (this.db = new DatabaseSync(path));
     db.exec(`
@@ -303,6 +309,7 @@ export class Grove {
     if (active) {
       this.#sightings();
       this.#family();
+      this.#diaries();
     }
     if (present !== this.#wasPresent) {
       this.#wasPresent = present;
@@ -319,6 +326,56 @@ export class Grove {
   #minute() {
     const c = this.clock();
     return (c.day - 1) * 1440 + c.hour * 60 + c.minute;
+  }
+
+  // Once a day, when a koala settles down to sleep, it writes its diary: one memory of the
+  // day worth keeping, and sometimes something new about who it is becoming. The computer's
+  // own model writes it when there is one; else the instinct keeps the day's biggest moment.
+  #diaries() {
+    const day = startOfDay(this.now());
+    const done = this.#meta('diary', {});
+    for (const k of this.#thinkers()) {
+      if (k.activity !== 'nap' || done[k.id] === day) continue;
+      done[k.id] = day;
+      this.#setMeta('diary', done);
+      const job = this.#diary(k.id)
+        .catch((err) => console.error('grove diary failed:', err))
+        .finally(() => this.#inflight.delete(job));
+      this.#inflight.add(job);
+    }
+  }
+
+  async #diary(id) {
+    const k = this.world.koalas[id];
+    const f = this.#all().find((o) => o.id !== id);
+    let entry = null;
+    if (this.localLlm) {
+      const prompt = [
+        `You are ${k.name}, a ${wisdomOf(k).wisdomLabel.toLowerCase()} koala, curious about ${interestsOf(k).join(', ') || 'everything'}.`,
+        (k.traits ?? []).length ? `Who you are: ${k.traits.join('; ')}.` : 'You are still finding out who you are.',
+        `What you already remember: ${(k.memories ?? []).slice(-6).join(' | ') || 'nothing yet'}.`,
+        `What happened today: ${(k.recent ?? []).join(' | ') || 'a quiet day'}.`,
+        (k.learned ?? []).length ? `Things you learned lately: ${k.learned.slice(-3).join(' | ')}.` : '',
+        f ? `Your friend is ${f.name}; how you feel about them: ${k.opinion || 'still deciding'}.` : '',
+        'Write memory: one sentence (under 140 characters) about today worth remembering for a long time, different from what you already remember.',
+        'Write trait: something new you found out about who you are, in one short sentence, or empty if nothing new.',
+      ].filter(Boolean).join('\n');
+      try { entry = await this.localLlm.diary(prompt); } catch { entry = null; }
+    }
+    if (!entry) {
+      const big = [...(k.recent ?? [])].reverse().find((e) => /finished the|rose from the water|was born|gave you|you read|found out|grew wiser/i.test(e));
+      if (!big) return;
+      entry = { memory: big.replace(/^You /, 'I ').slice(0, 140), trait: '' };
+    }
+    const memory = entry.memory.replace(/\s+/g, ' ').slice(0, 140);
+    if (!(k.memories ?? []).includes(memory)) k.memories = [...(k.memories ?? []), memory].slice(-12);
+    const trait = entry.trait.replace(/\s+/g, ' ').slice(0, 120);
+    if (trait && !(k.traits ?? []).some((t) => t.toLowerCase() === trait.toLowerCase())) {
+      k.traits = [...(k.traits ?? []), trait].slice(-MAX_TRAITS);
+      this.#log({ koala: id, kind: 'grow', text: `${k.name} found out something new about who they are: ${trait}` });
+    }
+    this.#save(id);
+    this.#log({ koala: id, kind: 'learn', text: `${k.name} wrote in the diary: ${memory}` });
   }
 
   // Births when a baby is due, and babies old enough to start deciding for themselves.
@@ -420,15 +477,6 @@ export class Grove {
   async #learn(id, topic, { web, offline = false }) {
     const k = this.world.koalas[id];
     const w = wisdomOf(k);
-    if (offline) {
-      const page = instinctRead(k, topic, this.rng);
-      if (!page) {
-        k.recent.push(`You looked through every book about ${topic}, but you know all of it already.`);
-        this.#save(id);
-        return;
-      }
-      return this.#learned(id, topic, page, { web: false });
-    }
     const known = relevantLearned({ ...k, wish: `${k.wish ?? ''} ${topic}` }, 4);
     const about = [
       `${k.name} is a ${w.wisdomLabel.toLowerCase()} koala, curious about ${interestsOf(k).join(', ') || 'everything'}.`,
@@ -439,6 +487,21 @@ export class Grove {
     const prompt = web
       ? `${k.name} the koala asks: ${topic}\n${about}\nAnswer as one fact the koala can remember, one idea for the grove (or empty), and one related topic the koala could wonder about next (or empty).`
       : `${k.name} the koala opens a book about: ${topic}\n${about}\nTell one true thing about it as a fact the koala can remember, one idea for the grove (or empty), and one related topic the koala could wonder about next (or empty).`;
+    if (offline) {
+      // the computer's own model writes a new page if it can; else the instinct's bookshelf
+      let page = null;
+      if (this.localLlm) {
+        try { page = await this.localLlm.read(prompt); } catch { page = null; }
+        if (page && (k.learned ?? []).includes(page.fact.replace(/\s+/g, ' ').slice(0, 280))) page = null;
+      }
+      page ??= instinctRead(k, topic, this.rng);
+      if (!page) {
+        k.recent.push(`You looked through every book about ${topic}, but you know all of it already.`);
+        this.#save(id);
+        return;
+      }
+      return this.#learned(id, topic, page, { web: false });
+    }
     const args = web
       ? researchArgs({ prompt, model: this.config.model, callUsd: this.config.researchUsd })
       : readArgs({ prompt, model: this.config.model, callUsd: this.config.readUsd });
@@ -853,7 +916,7 @@ export class Grove {
       pausedReason: this.#meta('pausedReason', null),
       present: this.present,
       capped: today.total.cost >= this.config.dayUsd,
-      brain: { mode: this.brainMode, modes: BRAINS, autonomous: this.autonomous, free: this.#freeStats(), hybridEvery: this.config.hybridEvery },
+      brain: { mode: this.brainMode, modes: BRAINS, autonomous: this.autonomous, free: this.#freeStats(), hybridEvery: this.config.hybridEvery, localModel: this.localLlm?.model ?? null },
       clock: this.clock(),
       places: placesOf(this.world),
       items: ITEMS,

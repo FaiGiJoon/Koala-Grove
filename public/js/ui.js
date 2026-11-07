@@ -465,6 +465,9 @@ export function createUI({ scene, api }) {
         ? 'The koalas are on instinct: every decision is made here, on your computer, and costs nothing. The real usage below is only from earlier model calls.'
         : `Real usage. Each model decision is one <code>claude -p</code> call on your Claude Code login,
         model <code>${esc(u.model)}</code>, at most ${fmtUsd(u.callUsd)} per call. The numbers come from the CLI's own result.${mode === 'hybrid' ? ' Everyday decisions are on instinct and free.' : ''}`}</div>
+      ${mode !== 'claude' ? `<div class="disclaimer">${state.brain?.localModel
+        ? `New library pages and the nightly diaries are written by <code>${esc(state.brain.localModel)}</code> on your computer, for free.`
+        : 'Start Ollama on this computer and the koalas learn something new every day for free: new library pages and a nightly diary. Until then they read their own bookshelf.'}</div>` : ''}
       <h3>On instinct (free)</h3>
       <div class="big">
         <div class="stat"><div class="k">Free today</div><div class="v">${free.today}</div></div>

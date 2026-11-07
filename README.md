@@ -80,6 +80,20 @@ does the best one:
   it an idea or a new curiosity. At most `GROVE_LOCAL_READS_PER_DAY` pages a day (48). Research
   needs the web, so on instinct a research question becomes a look in the books.
 
+**Getting smarter every day, still free.** If [Ollama](https://ollama.com) runs on the same
+computer, the koalas use it (`GROVE_OLLAMA_URL`, default `http://127.0.0.1:11434`) for the two
+things that need real words, while the instinct keeps deciding what they do:
+
+- **New library pages.** On instinct, a page a koala reads is written by the local model about its
+  topic, building on what it already knows, so the 40-page shelf never runs out. If Ollama is not
+  running, or the page repeats something it knows, the bookshelf answers instead.
+- **A nightly diary.** Once a day, when a koala settles down to sleep, it writes one memory of the
+  day worth keeping, and sometimes something new about who it is becoming (a trait). Without a
+  local model it keeps the day's biggest moment as a memory.
+
+It picks a good installed model by itself (gemma4, llama3.2, qwen2.5, ...), or the one in
+`GROVE_OLLAMA_MODEL`. `GROVE_OLLAMA_URL=off` turns it off. The Meter tab says which model is used.
+
 Wishes, an opinion of the friend, memories of big moments (a finished build, new land, a gift)
 and, rarely, a trait come along too. The **Meter** tab and a **Free** chip in the top bar count
 the decisions made on instinct (0 tokens).
@@ -343,6 +357,8 @@ All settings are environment variables.
 | `GROVE_HYBRID_EVERY` | `4` | In Hybrid, one routine decision in this many is a model call (being spoken to always is). |
 | `GROVE_LOCAL_READS_PER_DAY` | `48` | Pages read on instinct per day for the whole grove (1 to 1000). |
 | `GROVE_AUTOSTART` | `1` | `0` keeps a fresh grove paused on start, even on instinct. |
+| `GROVE_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama for free new library pages and nightly diaries; `off` turns it off. |
+| `GROVE_OLLAMA_MODEL` | (auto) | Which installed Ollama model to use; empty picks one (gemma4, llama3.2, qwen2.5, ...). |
 | `GROVE_MODEL` | `claude-haiku-5-5` | Model for the koalas' decisions. |
 | `GROVE_DAY_USD` | `0.5` | Real spend per day after which the koalas stop thinking until midnight. |
 | `GROVE_CALL_USD` | `0.05` | Spending cap per decision, passed to `--max-budget-usd` (at most 1). |
