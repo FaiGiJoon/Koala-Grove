@@ -192,3 +192,13 @@ test('customPlan: unknown shape falls back to shelter, size scales, colours are 
   for (const shape of SHAPES) for (const q of customPlan({ shape, size: 'big', parts: PARTS.slice(0, 8), colors: ['red', 'gold'] }).parts) assert.ok(Math.abs(q.pos[0]) <= 1.6 && Math.abs(q.pos[2]) <= 1.6, `${shape} ${q.type} ${q.pos}`);
   assert.ok(customPlan(undefined).parts.length >= 3);
 });
+
+test('statusOf: on instinct the grove is live with no page and past the cap', () => {
+  const base = { playing: true, present: false, capped: true, koalas: [{ thinking: false }] };
+  assert.equal(statusOf({ ...base, brain: { mode: 'local' } }).key, 'live');
+  assert.match(statusOf({ ...base, brain: { mode: 'local' } }).text, /No tokens/);
+  assert.equal(statusOf({ ...base, brain: { mode: 'hybrid' } }).key, 'live');
+  assert.equal(statusOf({ ...base, capped: false, brain: { mode: 'hybrid' } }).key, 'live');
+  assert.equal(statusOf({ ...base, brain: { mode: 'claude' } }).key, 'capped');
+  assert.equal(statusOf({ ...base, playing: false, brain: { mode: 'local' } }).key, 'paused');
+});

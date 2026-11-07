@@ -93,9 +93,18 @@ export function freshLog(log, lastId) {
 export function statusOf(s) {
   if (!s) return { key: 'offline', text: 'The grove server is not answering. Is it running?' };
   if (!s.playing) return { key: 'paused', text: s.pausedReason ? `Paused: ${s.pausedReason}` : 'Paused. Press Play to wake the koalas.' };
-  if (s.capped) return { key: 'capped', text: "Today's spend cap is reached. The koalas rest until tomorrow." };
-  if (!s.present) return { key: 'away', text: 'Waiting for this page to check in.' };
+  const mode = s.brain?.mode ?? 'claude';
+  if (mode === 'local') return { key: 'live', text: 'Living on instinct, 24/7. No tokens are spent, even with this page closed.' };
+  if (s.capped) {
+    if (mode === 'hybrid') return { key: 'live', text: "Today's spend cap is reached, so the koalas live on instinct until tomorrow. No tokens." };
+    return { key: 'capped', text: "Today's spend cap is reached. The koalas rest until tomorrow." };
+  }
+  if (!s.present) {
+    if (mode === 'hybrid') return { key: 'live', text: 'Living on instinct while no page is open. No tokens.' };
+    return { key: 'away', text: 'Waiting for this page to check in.' };
+  }
   if (s.koalas.some((k) => k.thinking)) return { key: 'thinking', text: 'A koala is thinking. This is a real model call.' };
+  if (mode === 'hybrid') return { key: 'live', text: 'Live. Instinct for everyday things, a real model call when a koala is spoken to.' };
   return { key: 'live', text: 'Live. Each koala decides every 20 to 60 seconds.' };
 }
 

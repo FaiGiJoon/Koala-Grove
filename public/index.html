@@ -76,6 +76,7 @@
     </div>
     <div class="chips" id="chips"></div>
     <button id="mode" class="back" type="button">Third person</button>
+    <button id="brain-btn" class="back" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="brain-pop" title="Choose how the koalas think">Brain: Instinct</button>
     <button id="play" class="playbtn" type="button">Play</button>
     <button id="dash-btn" class="iconbtn" type="button" aria-haspopup="dialog" aria-controls="dash" title="Owner dashboard"><svg class="ico" aria-hidden="true"><use href="#i-monitor"/></svg><span class="sr-only">Owner dashboard</span></button>
     <button id="settings" class="iconbtn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="settings-pop" title="Graphics settings"><svg class="ico" aria-hidden="true"><use href="#i-gear"/></svg><span class="sr-only">Graphics settings</span></button>
@@ -90,6 +91,15 @@
       <p id="q-now" class="q-note"></p>
       <label class="check"><input type="checkbox" id="fps-toggle"> Show frame rate</label>
       <p class="q-note">Auto lowers the resolution and then the effects if the game runs slowly, and brings them back when it can. Texture sharpness is set when the page loads.</p>
+    </div>
+    <div id="brain-pop" role="dialog" aria-label="How the koalas think" hidden>
+      <h2>How the koalas think</h2>
+      <div class="seg seg-3" role="group" aria-label="Brain">
+        <button type="button" data-brain="local">Instinct</button>
+        <button type="button" data-brain="hybrid">Hybrid</button>
+        <button type="button" data-brain="claude">Claude</button>
+      </div>
+      <p class="q-note" id="brain-note"></p>
     </div>
     <div id="time-pop" role="dialog" aria-label="Time of day" hidden>
       <h2>Time of day</h2>
@@ -136,7 +146,7 @@
     <div class="intro-card">
       <svg class="intro-logo" aria-hidden="true"><use href="#i-koala"/></svg>
       <h1>Koala Grove</h1>
-      <p class="lede">Crystal and Ruby are asleep in their grove. Both are real AI agents: every move they make and every word they say is a model decision, paid for in real tokens.</p>
+      <p class="lede" id="intro-lede">Crystal and Ruby are asleep in their grove. They decide every move for themselves: on instinct for free, around the clock, or with real model calls paid for in tokens.</p>
       <p class="fine" id="intro-cap"></p>
       <div class="intro-actions">
         <button class="btn wake" id="intro-play" type="button">Wake the koalas</button>

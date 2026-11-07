@@ -18,10 +18,24 @@ export function positiveNumber(name, raw, fallback, { integer = false, max = Inf
 
 const env = process.env;
 
+// Which brain the koalas use: local (free instinct, 24/7), hybrid or claude.
+export function brainMode(raw) {
+  if (raw === undefined || raw === '') return 'local';
+  const v = String(raw).trim().toLowerCase();
+  if (!['local', 'hybrid', 'claude'].includes(v)) throw new Error(`GROVE_BRAIN must be local, hybrid or claude, got: ${raw}`);
+  return v;
+}
+
 export default {
   port: positiveNumber('PORT', env.PORT, 4317, { integer: true, max: 65535 }),
   // Two koalas on real model calls; GROVE_DAY_USD caps today's real spend.
   grove: {
+    brain: brainMode(env.GROVE_BRAIN),
+    // in hybrid, a routine decision is a model call once in this many (being spoken to always is)
+    hybridEvery: positiveNumber('GROVE_HYBRID_EVERY', env.GROVE_HYBRID_EVERY, 4, { integer: true, max: 100 }),
+    localReadsPerDay: positiveNumber('GROVE_LOCAL_READS_PER_DAY', env.GROVE_LOCAL_READS_PER_DAY, 48, { integer: true, max: 1000 }),
+    // a never-played grove wakes by itself when the brain needs no tokens
+    autoStart: env.GROVE_AUTOSTART !== '0',
     model: env.GROVE_MODEL || 'claude-haiku-5-5',
     bin: env.GROVE_BIN || env.CLAUDE_BIN || 'claude',
     callUsd: positiveNumber('GROVE_CALL_USD', env.GROVE_CALL_USD, 0.05, { max: 1 }),
