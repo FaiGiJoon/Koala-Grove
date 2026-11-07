@@ -1,5 +1,6 @@
 // The page's line to the grove server: the grove API, the event stream,
-// and the heartbeat that tells the server this page is open (no heartbeat, no thinking).
+// and the heartbeat that tells the server this page is open (no heartbeat, no model calls;
+// on the instinct brain the koalas live on without it).
 
 async function request(url, opts) {
   const res = await fetch(url, opts);
@@ -23,6 +24,7 @@ export const groveApi = {
   heartbeat: () => post('/api/grove/heartbeat'),
   act: (body) => post('/api/grove/act', body),
   time: (to) => post('/api/grove/time', { to }),
+  brain: (mode) => post('/api/grove/brain', { mode }),
   name: (koala, name) => post('/api/grove/name', { koala, name }),
   reply: (id, text) => post(`/api/grove/tickets/${id}/reply`, { text }),
   close: (id) => post(`/api/grove/tickets/${id}/close`),

@@ -1,17 +1,21 @@
 # Koala Grove
 
 A small 3D game and an experiment: two koalas, Crystal and Ruby, live on a floating
-eucalyptus island, and every move they make and every word they say is a real model decision.
-They explore, play, eat, nap, talk, remember, grow up, and build things that make their world
-bigger. You can walk around, or just watch how two AI agents get on when left to themselves.
+eucalyptus island and decide every move for themselves. They explore, play, eat, nap, talk,
+remember, grow up, and build things that make their world bigger. You can walk around, or just
+watch how two agents get on when left to themselves.
+
+By default they live on **instinct**: a brain that runs on your own computer, costs no tokens,
+and keeps the grove alive 24/7, even with the page closed. Switch to **Hybrid** or **Claude** in
+the Brain menu when you want real model decisions (see [The brain](#the-brain-instinct-hybrid-or-claude)).
 
 It runs only on your own computer (127.0.0.1); nothing is deployed anywhere.
 
 ## Requirements
 
 - Node 26 or newer (Node 24 works too). There are no npm dependencies.
-- The Claude Code CLI (`claude`) installed and already logged in. The koalas use your existing
-  login, not an API key.
+- Only for the Hybrid and Claude brains: the Claude Code CLI (`claude`) installed and already
+  logged in. The koalas use your existing login, not an API key. On instinct nothing is needed.
 - Internet for three.js, which loads from cdn.jsdelivr.net (pinned to 0.160.0; the page's
   Content-Security-Policy allows only that host and a hash of its import map).
 
@@ -40,6 +44,51 @@ To undo it (the koalas' memories in `data/` are kept):
 ```
 scripts/uninstall-autostart.sh
 ```
+
+## The brain: instinct, hybrid or Claude
+
+The **Brain** button in the top bar picks how the koalas think. The choice is saved in the grove
+and survives restarts; `GROVE_BRAIN` sets the starting mode.
+
+| Brain | Who decides | Tokens | Needs the page open |
+| --- | --- | --- | --- |
+| **Instinct** (`local`, the default) | The instinct, every decision | None, ever | No: they live 24/7 |
+| **Hybrid** | Instinct for everyday things; a model call when someone talks to or gives something to a koala, and every 4th decision otherwise (`GROVE_HYBRID_EVERY`) | Only while a page is open, up to the cap | No: with no page, or once the cap is reached, they carry on on instinct |
+| **Claude** | A `claude -p` call, every decision | Yes, up to the cap | Yes, as before |
+
+**The instinct** (`hq/grove-instinct.js`) reads the same world the model sees and answers with the
+same decision JSON, so the server checks and carries it out exactly the same way. Each koala
+scores what it could do against its needs, its temperament and what just happened to it, and
+does the best one:
+
+- **Needs first.** A hungry koala goes to the nearest gum tree and eats; a tired one naps; at
+  night they go home and sleep (Ruby a little earlier than Crystal).
+- **Work.** Each koala has favourite builds (Crystal: the bridge to Stone Crag, lanterns, the
+  tower; Ruby: benches, the reading nook, flower beds). It starts one the Stockpile can pay for,
+  or works out what is missing, walks to where that resource is, gathers it and carries it home.
+  When one koala is building, the other comes to help, so they build together and twice as
+  fast. Now and then one invents something of its own (a Star Lookout, a Sleepy Cottage).
+  Something new comes before a second of the same.
+- **Each other.** They answer when spoken to (not every time, so they do not talk in circles),
+  visit each other, give each other things, and their bond grows. Grown-ups in love make a nest.
+- **You.** A gift gets a thank-you; words or a pat get an answer in the koala's own voice.
+- **Play, learning and wandering**, for when needs are met. Doing the same thing again and
+  again gets boring, so they change it up.
+- **Reading** on instinct uses a shelf of 40 short, true picture-book pages (stars, the moon,
+  crystals, sleepy animals, frogs, bridges, poems...). A koala gets the page that best matches
+  its topic and interests and has not read yet, it grows wiser the same way, and a page can give
+  it an idea or a new curiosity. At most `GROVE_LOCAL_READS_PER_DAY` pages a day (48). Research
+  needs the web, so on instinct a research question becomes a look in the books.
+
+Wishes, an opinion of the friend, memories of big moments (a finished build, new land, a gift)
+and, rarely, a trait come along too. The **Meter** tab and a **Free** chip in the top bar count
+the decisions made on instinct (0 tokens).
+
+**24/7.** On instinct a grove that has never been played wakes up by itself when the server
+starts (`GROVE_AUTOSTART=0` turns that off), and from then on it lives without a page. Pause
+still stops it. With `scripts/install-autostart.sh` the server starts at login and restarts
+if it crashes, so the koalas keep living whether or not you are watching; open the page any
+time to see what they got up to.
 
 ## The koalas
 
@@ -250,10 +299,11 @@ prompt): about 3,350 tokens in, 570 out and $0.00073 per decision, the same per 
 those were added. With the slower pacing when nothing is going on, two koalas cost roughly $0.08 to
 $0.15 an hour; a read costs at most $0.03 and a research trip at most $0.10.
 
-- The grove starts **paused**. Nothing is called until you press **Play** (or "Wake the koalas").
-- Even when playing, the koalas only think while a grove page is open and visible: the page
+- On the **Instinct** brain (the default) nothing below applies: no model is ever called.
+- On Claude the grove starts **paused**. Nothing is called until you press **Play** (or "Wake the koalas").
+- Even when playing, model calls only happen while a grove page is open and visible: the page
   checks in every 15 seconds, and 45 seconds without a check-in stops the calls. Close the tab
-  and they rest.
+  and they rest (on Claude) or carry on on instinct (on Hybrid).
 - Each koala decides every 20 to 60 seconds, sooner (6 to 12 seconds) when spoken to or given
   something, later (40 to 90 seconds) when nothing has happened to it since it last decided, never
   twice within 12 seconds, and never with two calls in flight. Babies that follow a parent make no
@@ -289,6 +339,10 @@ All settings are environment variables.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PORT` | `4317` | Port to listen on (always on 127.0.0.1). |
+| `GROVE_BRAIN` | `local` | Starting brain: `local` (instinct, free, 24/7), `hybrid` or `claude`. The Brain menu overrides it. |
+| `GROVE_HYBRID_EVERY` | `4` | In Hybrid, one routine decision in this many is a model call (being spoken to always is). |
+| `GROVE_LOCAL_READS_PER_DAY` | `48` | Pages read on instinct per day for the whole grove (1 to 1000). |
+| `GROVE_AUTOSTART` | `1` | `0` keeps a fresh grove paused on start, even on instinct. |
 | `GROVE_MODEL` | `claude-haiku-5-5` | Model for the koalas' decisions. |
 | `GROVE_DAY_USD` | `0.5` | Real spend per day after which the koalas stop thinking until midnight. |
 | `GROVE_CALL_USD` | `0.05` | Spending cap per decision, passed to `--max-budget-usd` (at most 1). |

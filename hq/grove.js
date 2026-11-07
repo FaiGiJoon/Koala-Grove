@@ -1,7 +1,10 @@
-// Koala Grove: two koalas whose every move is a real model decision.
-// Thinking costs real tokens, so it only happens while the player has pressed
-// Play and a grove page keeps checking in, and never past the daily cap. Memory,
-// the relationship and every call's real usage are kept in sqlite (data/).
+// Koala Grove: two koalas who decide every move for themselves.
+// Each decision comes from one of two brains. The instinct (grove-instinct.js) runs
+// here, costs nothing and lets the grove live 24/7, page open or not. A real model
+// call costs tokens, so it only happens while the player has pressed Play and a grove
+// page keeps checking in, and never past the daily cap. The brain mode (local, hybrid,
+// claude) picks between them. Memory, the relationship and every call's real usage
+// are kept in sqlite (data/).
 
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,13 +13,23 @@ import {
   wisdomOf, relevantLearned, interestsOf, MAX_LEARNED, MAX_CURIOSITIES,
 } from './grove-world.js';
 import { koalaArgs, researchArgs, readArgs, think as callClaude } from './grove-brain.js';
+import { instinctDecide, instinctRead } from './grove-instinct.js';
 import { RESOURCES, ISLANDS, COSTS, START_STOCK, held, bridged, stockOf } from './grove-economy.js';
 import { BABY_NAMES, babyPersona, bornBaby, graduates } from './grove-family.js';
 import { designCost } from './grove-design.js';
 import { Tickets, MAX_OPEN_TICKETS } from './grove-tickets.js';
 import { problemsOf, habitsOf, hourly, exportTabs, DAY_MS as DAY } from './grove-dashboard.js';
 
+// Which brain decides. local: always the free instinct, 24/7, no page needed. hybrid: the
+// instinct, plus a real model call when a page is open and a koala was spoken to (or every
+// hybridEvery-th decision). claude: every decision is a model call, only while a page is open.
+export const BRAINS = ['local', 'hybrid', 'claude'];
+
 export const GROVE_DEFAULTS = {
+  brain: 'claude',
+  hybridEvery: 4,
+  localReadsPerDay: 48, // books read on instinct cost nothing, but a day has only so many pages
+  autoStart: false, // wake a fresh grove on start when the brain needs no tokens
   model: 'claude-haiku-5-5',
   callUsd: 0.05, // --max-budget-usd for one decision
   dayUsd: 0.5, // no new calls once today's real spend reaches this
@@ -61,7 +74,7 @@ export class Grove {
   #listeners = [];
   #timer = null;
   #inflight = new Set();
-  #run = {}; // per koala: nextAt, thinking, lastStart, replyDue, stirred, calm
+  #run = {}; // per koala: nextAt, thinking, lastStart, replyDue, stirred, calm, count
   #lastHour = null;
   #heartbeatAt = 0;
   #lastDrift = 0;
@@ -196,6 +209,33 @@ export class Grove {
     return this.now() - this.#heartbeatAt < this.config.presenceMs;
   }
 
+  // The brain mode the owner picked on the page, else the configured one.
+  get brainMode() {
+    const m = this.#meta('brain', null);
+    return BRAINS.includes(m) ? m : BRAINS.includes(this.config.brain) ? this.config.brain : 'claude';
+  }
+  // Whether the grove can go on without a page and without tokens.
+  get autonomous() {
+    return this.brainMode !== 'claude';
+  }
+  // Whether a model call is allowed right now; if not, the instinct decides and reads.
+  #online() {
+    const mode = this.brainMode;
+    if (mode === 'local') return false;
+    return this.present && !this.capped;
+  }
+
+  setBrain(mode) {
+    if (!BRAINS.includes(mode)) throw new GroveError(400, `brain must be one of: ${BRAINS.join(', ')}`);
+    if (mode === this.brainMode) return this.state();
+    this.#setMeta('brain', mode);
+    const words = { local: 'instinct only (free, 24/7)', hybrid: 'instinct, with real model calls while you watch', claude: 'real model calls only' };
+    this.#log({ kind: 'system', text: `Brain set to ${words[mode]}.` });
+    if (this.playing) this.#schedule();
+    this.#emit();
+    return this.state();
+  }
+
   onChange(fn) {
     this.#listeners.push(fn);
   }
@@ -249,7 +289,8 @@ export class Grove {
   tick() {
     const now = this.now();
     const present = this.present;
-    const active = this.playing && present;
+    // On instinct the grove lives without a page; on model calls only while one is open.
+    const active = this.playing && (present || this.autonomous);
     if (active && this.#lastDrift) {
       const minutes = Math.min(2, (now - this.#lastDrift) / 60000);
       for (const k of this.#all()) {
@@ -267,7 +308,7 @@ export class Grove {
       this.#wasPresent = present;
       this.#emit();
     }
-    if (!active || this.capped) return;
+    if (!active || (this.capped && !this.autonomous)) return;
     for (const k of this.#thinkers()) {
       const r = this.#run[k.id];
       if (!r.thinking && now >= r.nextAt) this.#decide(k.id);
@@ -330,8 +371,9 @@ export class Grove {
   }
 
   // Reading happens at Library Isle or at a finished build about books, a few times a day.
-  #mayRead(id) {
+  #mayRead(id, offline = false) {
     const k = this.world.koalas[id];
+    if (offline) return this.#mayReadFree(id);
     if (this.capped) {
       k.recent.push('You wanted to read, but the grove has used its tokens for today.');
       return false;
@@ -350,11 +392,43 @@ export class Grove {
     return true;
   }
 
+  // Reading on instinct: no tokens, but no more than localReadsPerDay pages a day.
+  #freeReadsLeft() {
+    const day = startOfDay(this.now());
+    const used = this.#meta('localReads', { day, count: 0 });
+    return this.config.localReadsPerDay - (used.day === day ? used.count : 0);
+  }
+  #mayReadFree(id) {
+    const k = this.world.koalas[id];
+    if (!canReadAt(this.world, k.place)) {
+      k.recent.push('You wanted to read, but you can read only at the library or somewhere with books.');
+      return false;
+    }
+    if (this.#freeReadsLeft() <= 0) {
+      k.recent.push('You wanted to read, but you have read enough for today. Come back tomorrow.');
+      return false;
+    }
+    const day = startOfDay(this.now());
+    const used = this.#meta('localReads', { day, count: 0 });
+    this.#setMeta('localReads', { day, count: (used.day === day ? used.count : 0) + 1 });
+    return true;
+  }
+
   // A learning call: a book (no tools) or the web (search only), each with its own budget.
+  // Offline, the instinct's own shelf of books answers instead, for free.
   // What comes back is kept in `learned` and told to koalas at the same place.
-  async #learn(id, topic, { web }) {
+  async #learn(id, topic, { web, offline = false }) {
     const k = this.world.koalas[id];
     const w = wisdomOf(k);
+    if (offline) {
+      const page = instinctRead(k, topic, this.rng);
+      if (!page) {
+        k.recent.push(`You looked through every book about ${topic}, but you know all of it already.`);
+        this.#save(id);
+        return;
+      }
+      return this.#learned(id, topic, page, { web: false });
+    }
     const known = relevantLearned({ ...k, wish: `${k.wish ?? ''} ${topic}` }, 4);
     const about = [
       `${k.name} is a ${w.wisdomLabel.toLowerCase()} koala, curious about ${interestsOf(k).join(', ') || 'everything'}.`,
@@ -385,6 +459,14 @@ export class Grove {
       this.#log({ koala: id, kind: 'error', text: `${k.name}'s ${web ? 'research' : 'reading'} found nothing: ${out.error ?? 'no answer'}` });
       return;
     }
+    return this.#learned(id, topic, raw, { web });
+  }
+
+  // What a koala learned (a fact, maybe an idea and a new curiosity) goes into its mind.
+  #learned(id, topic, raw, { web }) {
+    const k = this.world.koalas[id];
+    const w = wisdomOf(k);
+    const fact = raw.fact.trim().replace(/\s+/g, ' ').slice(0, 280);
     const idea = typeof raw.idea === 'string' ? raw.idea.trim().replace(/\s+/g, ' ').slice(0, 160) : '';
     k.learned = [...(k.learned ?? []), fact].slice(-MAX_LEARNED);
     const trim = (x) => { if (x.recent.length > 10) x.recent.splice(0, x.recent.length - 10); };
@@ -487,20 +569,41 @@ export class Grove {
     }
   }
 
+  // Model call or instinct for this decision. Hybrid spends tokens where they matter most:
+  // when someone just spoke to or gave something to the koala, and now and then otherwise.
+  #usesModel(id) {
+    const mode = this.brainMode;
+    if (mode === 'claude') return true;
+    if (!this.#online()) return false;
+    const r = this.#run[id];
+    r.count = (r.count ?? 0) + 1;
+    return r.stirred || r.count % Math.max(1, this.config.hybridEvery) === 0;
+  }
+
   #decide(id) {
     const r = this.#run[id];
+    const model = this.#usesModel(id);
     r.calm = !r.stirred;
     r.stirred = false;
     r.thinking = true;
     r.replyDue = false;
     r.lastStart = this.now();
-    const req = {
-      koala: id,
-      system: systemPrompt(id, this.world),
-      prompt: buildPrompt(this.world, id, this.clock()),
-    };
     let call;
-    try { call = Promise.resolve(this.brain(req)); } catch (err) { call = Promise.reject(err); }
+    if (model) {
+      const req = {
+        koala: id,
+        system: systemPrompt(id, this.world),
+        prompt: buildPrompt(this.world, id, this.clock()),
+      };
+      try { call = Promise.resolve(this.brain(req)); } catch (err) { call = Promise.reject(err); }
+    } else {
+      // instinct: no tokens, no usage row, never fails
+      const canRead = this.#freeReadsLeft() > 0;
+      try {
+        call = Promise.resolve({ ok: true, raw: instinctDecide(this.world, id, this.clock(), this.rng, { canRead }), usage: null, local: true });
+      } catch (err) { call = Promise.reject(err); }
+      this.#countFree();
+    }
     const job = call
       .catch((err) => ({ ok: false, raw: null, usage: null, error: err.message }))
       .then((out) => this.#finish(id, out))
@@ -512,6 +615,18 @@ export class Grove {
       });
     this.#inflight.add(job);
     this.#emit();
+  }
+
+  // Decisions made on instinct today, for the meter.
+  #countFree() {
+    const day = startOfDay(this.now());
+    const used = this.#meta('instinct', { day, count: 0, total: 0 });
+    this.#setMeta('instinct', { day, count: (used.day === day ? used.count : 0) + 1, total: (used.total ?? 0) + 1 });
+  }
+  #freeStats() {
+    const day = startOfDay(this.now());
+    const used = this.#meta('instinct', { day, count: 0, total: 0 });
+    return { today: used.day === day ? used.count : 0, total: used.total ?? 0 };
   }
 
   #finish(id, out) {
@@ -535,11 +650,14 @@ export class Grove {
     if (decision.action === 'file_ticket') this.#fileTicket(id, decision);
     let question = null;
     let topic = null;
+    // Without tokens there is no web: a research question becomes a look in the books.
+    const offline = !!out.local || !this.#online();
+    if (decision.action === 'research' && offline) decision.action = 'read';
     if (decision.action === 'research') {
       question = this.#mayResearch(id) ? decision.target : null;
       if (!question) decision.action = 'sit';
     } else if (decision.action === 'read') {
-      topic = this.#mayRead(id) ? decision.target : null;
+      topic = this.#mayRead(id, offline) ? decision.target : null;
       if (!topic) decision.action = 'sit';
     }
     this.world.minute = this.#minute();
@@ -569,7 +687,7 @@ export class Grove {
     r.nextAt = next;
     r.replyDue = false;
     if (question) return this.#learn(id, question, { web: true });
-    if (topic) return this.#learn(id, topic, { web: false });
+    if (topic) return this.#learn(id, topic, { web: false, offline });
   }
 
   async idle() {
@@ -658,6 +776,8 @@ export class Grove {
 
   start() {
     if (this.#timer) return;
+    // A grove that has never been played wakes by itself when its brain costs nothing.
+    if (this.config.autoStart && this.autonomous && this.#meta('playing', null) === null) this.play();
     this.#timer = setInterval(() => this.tick(), this.config.tickMs);
   }
 
@@ -733,6 +853,7 @@ export class Grove {
       pausedReason: this.#meta('pausedReason', null),
       present: this.present,
       capped: today.total.cost >= this.config.dayUsd,
+      brain: { mode: this.brainMode, modes: BRAINS, autonomous: this.autonomous, free: this.#freeStats(), hybridEvery: this.config.hybridEvery },
       clock: this.clock(),
       places: placesOf(this.world),
       items: ITEMS,

@@ -129,6 +129,44 @@ export function createUI({ scene, api }) {
     }
   });
 
+  // --- brain: instinct, hybrid or Claude ----------------------------------------------------
+  const brainPop = $('#brain-pop');
+  const brainBtn = $('#brain-btn');
+  const BRAIN_NAMES = { local: 'Instinct', hybrid: 'Hybrid', claude: 'Claude' };
+  const BRAIN_NOTES = {
+    local: 'Instinct: the koalas decide on their own, right here on your computer. No tokens at all, and they keep living 24/7 with this page closed.',
+    hybrid: 'Hybrid: instinct for everyday things, a real model call when someone talks to a koala (and now and then otherwise), only while a page is open. Closed page or cap reached: instinct, for free.',
+    claude: 'Claude: every decision is a real model call, only while a page is open, up to the daily cap.',
+  };
+  function markBrain() {
+    const mode = state?.brain?.mode ?? 'claude';
+    for (const b of brainPop.querySelectorAll('[data-brain]')) b.setAttribute('aria-pressed', String(b.dataset.brain === mode));
+    $('#brain-note').textContent = BRAIN_NOTES[mode];
+    brainBtn.textContent = `Brain: ${BRAIN_NAMES[mode]}`;
+  }
+  brainBtn.addEventListener('click', () => {
+    brainPop.hidden = !brainPop.hidden;
+    brainBtn.setAttribute('aria-expanded', String(!brainPop.hidden));
+    markBrain();
+  });
+  for (const b of brainPop.querySelectorAll('[data-brain]')) {
+    b.addEventListener('click', async () => {
+      try {
+        await api.brain(b.dataset.brain);
+        const short = { local: 'free, 24/7', hybrid: 'free, plus model calls while you watch', claude: 'real model calls' };
+        toast(`Brain: ${BRAIN_NAMES[b.dataset.brain]} (${short[b.dataset.brain]}).`);
+      } catch (err) {
+        toast(err.message);
+      }
+    });
+  }
+  addEventListener('pointerdown', (e) => {
+    if (!brainPop.hidden && !e.target.closest('#brain-pop, #brain-btn')) {
+      brainPop.hidden = true;
+      brainBtn.setAttribute('aria-expanded', 'false');
+    }
+  });
+
   // --- graphics settings ---------------------------------------------------------------
   const pop = $('#settings-pop');
   const gear = $('#settings');
@@ -288,7 +326,7 @@ export function createUI({ scene, api }) {
     + `Climbs ${Math.round(k.reach * 100)}% of a tree, holds ${k.carry}.`;
   function nextIn(k) {
     if (k.thinking) return 'thinking now';
-    if (!state.playing || state.capped || k.nextAt == null) return 'resting';
+    if (!state.playing || (state.capped && state.brain?.mode === 'claude') || k.nextAt == null) return 'resting';
     const s = Math.max(0, Math.round((k.nextAt - (Date.now() + clockOffset)) / 1000));
     return s ? `decides in ${s} s` : 'deciding soon';
   }
@@ -420,14 +458,24 @@ export function createUI({ scene, api }) {
       </div>`;
     };
     const last = u.last;
+    const free = state.brain?.free ?? { today: 0, total: 0 };
+    const mode = state.brain?.mode ?? 'claude';
     $('#tab-meter').innerHTML = `
-      <div class="disclaimer real-note">Real usage. Each decision is one <code>claude -p</code> call on your Claude Code login,
-        model <code>${esc(u.model)}</code>, at most ${fmtUsd(u.callUsd)} per call. The numbers come from the CLI's own result.</div>
+      <div class="disclaimer real-note">${mode === 'local'
+        ? 'The koalas are on instinct: every decision is made here, on your computer, and costs nothing. The real usage below is only from earlier model calls.'
+        : `Real usage. Each model decision is one <code>claude -p</code> call on your Claude Code login,
+        model <code>${esc(u.model)}</code>, at most ${fmtUsd(u.callUsd)} per call. The numbers come from the CLI's own result.${mode === 'hybrid' ? ' Everyday decisions are on instinct and free.' : ''}`}</div>
+      <h3>On instinct (free)</h3>
+      <div class="big">
+        <div class="stat"><div class="k">Free today</div><div class="v">${free.today}</div></div>
+        <div class="stat"><div class="k">Free all time</div><div class="v">${free.total}</div></div>
+        <div class="stat"><div class="k">Tokens</div><div class="v">0</div></div>
+      </div>
       <h3>Today</h3>
       <div class="spend"><b>${fmtUsd(u.today.cost)}</b> of ${fmtUsd(u.dayUsd)} daily cap</div>
       <div class="bar cap"><i style="width:${pct}%;background:${pct >= 100 ? 'var(--red)' : 'var(--real)'}"></i></div>
       <div class="big real">
-        <div class="stat"><div class="k">Decisions</div><div class="v">${u.today.calls}</div></div>
+        <div class="stat"><div class="k">Model calls</div><div class="v">${u.today.calls}</div></div>
         <div class="stat"><div class="k">Tokens in</div><div class="v">${fmtTokens(u.today.tokens_in)}</div></div>
         <div class="stat"><div class="k">Tokens out</div><div class="v">${fmtTokens(u.today.tokens_out)}</div></div>
       </div>
@@ -466,11 +514,15 @@ export function createUI({ scene, api }) {
     $('#chips').innerHTML = `
       <div class="chip status ${st.key}" title="${esc(st.text)}"><i></i>${esc({ live: 'Live', thinking: 'Thinking', paused: 'Paused', capped: 'Cap reached', away: 'Waiting', offline: 'Offline' }[st.key])}</div>
       <div class="chip stockchip" title="What is in the Stockpile">Stockpile <b>${esc(stockText(state.stock))}</b></div>
+      ${state.brain?.mode !== 'claude' ? `<div class="chip" title="Decisions made on instinct today: no tokens">Free <b>${state.brain?.free?.today ?? 0}</b></div>` : ''}
       <div class="chip real" title="Real spend today, against GROVE_DAY_USD">Today <b>${fmtUsd(u.today.cost)}</b> / ${fmtUsd(u.dayUsd)}</div>
       <div class="chip real" title="Real tokens today, in and out">Tokens <b>${fmtTokens(u.today.tokens_in + u.today.tokens_out)}</b></div>`;
     playBtn.innerHTML = state.playing ? `${ICON('i-pause')}Pause` : `${ICON('i-playbtn')}Play`;
     playBtn.classList.toggle('on', !state.playing);
-    playBtn.title = state.playing ? 'Pause: no more model calls' : 'Play: the koalas start making real model calls';
+    playBtn.title = state.brain?.mode === 'local'
+      ? (state.playing ? 'Pause: the koalas stop and wait' : 'Play: the koalas live on instinct, 24/7, for free')
+      : state.playing ? 'Pause: no more decisions or model calls' : 'Play: the koalas start deciding';
+    markBrain();
     $('#status-line').textContent = st.text;
     $('#clock').textContent = state.clock.label;
     const night = state.clock.phase === 'night';
@@ -501,7 +553,9 @@ export function createUI({ scene, api }) {
       if (s.playing) introDismissed = true; // the intro is for a grove that has not woken yet
       if (!introDismissed) {
         intro.hidden = s.playing;
-        $('#intro-cap').textContent = `Today's cap is ${fmtUsd(s.usage.dayUsd)}, on ${s.usage.model}. Spent so far: ${fmtUsd(s.usage.today.cost)}.`;
+        $('#intro-cap').textContent = s.brain?.mode === 'local'
+          ? 'They are on instinct: free, and they keep living with this page closed. Pick Hybrid or Claude in the Brain menu for model calls.'
+          : `Today's cap is ${fmtUsd(s.usage.dayUsd)}, on ${s.usage.model}. Spent so far: ${fmtUsd(s.usage.today.cost)}.`;
       }
       draw();
     },

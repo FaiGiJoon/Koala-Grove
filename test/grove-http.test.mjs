@@ -151,3 +151,12 @@ test('ticket routes: reply and close need JSON from this origin; unknown ids 404
   assert.equal((await post(`/api/grove/tickets/${t.id}/close`)).status, 200);
   assert.equal((await post(`/api/grove/tickets/${t.id}/close`, {}, { 'content-type': 'text/plain' })).status, 415);
 });
+
+test('POST /api/grove/brain switches the brain; a bad mode is 400; it needs JSON', async () => {
+  const res = await post('/api/grove/brain', { mode: 'local' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).brain.mode, 'local');
+  assert.equal((await post('/api/grove/brain', { mode: 'psychic' })).status, 400);
+  assert.equal((await post('/api/grove/brain', { mode: 'claude' }, { 'content-type': 'text/plain' })).status, 415);
+  await post('/api/grove/brain', { mode: 'claude' });
+});
