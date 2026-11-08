@@ -74,8 +74,10 @@ test('each koala commits its life once a day: profile, diary, mind and a project
   });
   grove.play();
   for (let i = 0; i < 6 * 300; i++) { t += 10000; grove.tick(); await grove.idle(); }
-  assert.ok(f.commits.length >= 1 && f.commits.length <= 2, `${f.commits.length} commits: one per koala per day`);
   const ids = f.commits.map((c) => c.author.email.split('@')[0]);
+  assert.ok(ids.length >= 2, 'both founders committed');
+  assert.equal(new Set(ids).size, ids.length, 'one commit per koala per day (babies born on the way count too)');
+  assert.ok(ids.length <= grove.state().koalas.length);
   for (const id of ids) {
     assert.ok(f.files[`${id}/README.md`].startsWith('# '), 'a profile');
     assert.ok(f.files[`${id}/mind.json`].includes('"beliefs"'), 'its mind');
