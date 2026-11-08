@@ -54,6 +54,15 @@ export default {
     // the koalas' own GitHub: a fine-grained token with Contents read/write on one repository
     githubToken: env.GROVE_GITHUB_TOKEN || '',
     githubRepo: env.GROVE_GITHUB_REPO || '',
+    // each koala's own computer: a sealed Docker box (no network, no token) where it tests what
+    // it makes before it goes on its GitHub; 'off' turns it off, and without Docker it just skips
+    computer: env.GROVE_COMPUTER !== 'off',
+    computerDir: path.join(root, 'work', 'computers'),
+    computerImage: env.GROVE_COMPUTER_IMAGE || 'node:24-alpine',
+    docker: env.GROVE_DOCKER || 'docker',
+    makesPerDay: positiveNumber('GROVE_MAKES_PER_DAY', env.GROVE_MAKES_PER_DAY, 1, { integer: true, max: 10 }),
+    makeUsd: positiveNumber('GROVE_MAKE_USD', env.GROVE_MAKE_USD, 0.25, { max: 2 }),
+    makeModel: env.GROVE_MAKE_MODEL || '',
     model: env.GROVE_MODEL || 'claude-haiku-5-5',
     bin: env.GROVE_BIN || env.CLAUDE_BIN || 'claude',
     callUsd: positiveNumber('GROVE_CALL_USD', env.GROVE_CALL_USD, 0.05, { max: 1 }),

@@ -16,6 +16,8 @@ It runs only on your own computer (127.0.0.1); nothing is deployed anywhere.
 - Node 26 or newer (Node 24 works too). There are no npm dependencies.
 - Only for the Hybrid and Claude brains: the Claude Code CLI (`claude`) installed and already
   logged in. The koalas use your existing login, not an API key. On instinct nothing is needed.
+- Optional, for the koalas' own computers: Docker (Docker Desktop on a Mac). Without it they
+  still make things; they just cannot test them first.
 - Internet for three.js, which loads from cdn.jsdelivr.net (pinned to 0.160.0; the page's
   Content-Security-Policy allows only that host and a hash of its import map).
 
@@ -146,6 +148,8 @@ own, as the author of the commit (`Ruby the koala`). Nobody tells it what to wri
 - `<koala>/projects/<name>/README.md`: its projects. An invention of its own that the grove built,
   or its notes on the topic it has learned most about, written in its own voice by the local
   model when there is one.
+- `<koala>/makes/<name>/`: anything it made at its own computer (see below), with a README in its
+  own words.
 - `README.md`: an index of the koalas.
 
 To set it up, make the repository (tick **Add a README**), create a fine-grained token for it
@@ -161,6 +165,43 @@ start), restarts the grove and offers to let every koala write a first page righ
 token is never sent to the page.
 
 If a commit fails, the grove logs one line and tries again the next day.
+
+### Their own computer: making anything they want
+
+Each koala has a computer. At its evening diary it may sit down at it and make one thing,
+whatever it wants: a game for the browser, a calculator, a website, a tool, a story, a song as
+notes, a drawing as SVG. Nobody gives it a task. The prompt tells it who it is (its traits, what
+it holds to, its interests, its wish, what it learned and did today) and what it made before,
+with the files of the last one, so it can keep working on something (same title, same folder)
+or start something new. It answers with the files and one command that checks they work.
+
+That command runs in the koala's **sealed box**, a throwaway Docker container (`node:24-alpine`)
+that can see only that one project folder (`work/computers/<koala>/<project>/`):
+
+- no network (`--network none`), no environment from your Mac (so no GitHub token and no Claude
+  login), a read-only system with a small `/tmp`;
+- a normal user, every Linux capability dropped, `no-new-privileges`;
+- 256 MB of memory, one CPU, 128 processes, 30 seconds, and its output capped.
+
+If the test fails and Claude is the brain, Claude gets one go at fixing it with what the box
+said. Then it goes on the koala's GitHub under `<koala>/makes/<project>/`, tested or not, with an
+honest "Did it work?" section. Files are checked first: only relative text files with plain
+names, at most 24 files, 60 KB each and 200 KB in all, no hidden files (so never
+`.github/workflows`), nothing outside its own folder.
+
+Who makes it:
+
+- **Claude**, when the brain is Claude or Hybrid and a grove page is open, like every other model
+  call. One make is one tool-less `claude -p` call with `--max-budget-usd $GROVE_MAKE_USD`, and it
+  counts towards `GROVE_DAY_USD`. Measured on 2026-11-08 with `claude-haiku-5-5`: a 4-file game
+  with its own test, a failed first test and a fix, came to $0.017 and about 110 seconds.
+- **Ollama** otherwise, if one answers at `GROVE_OLLAMA_URL`. It can run on another computer, a
+  Windows PC with a GPU, say: `GROVE_OLLAMA_URL=http://<pc>:11434` (on the PC, set
+  `OLLAMA_HOST=0.0.0.0` so it listens on the network).
+- Nobody, on the instinct brain with no Ollama: then nothing is made that day.
+
+`GROVE_MAKES_PER_DAY` (default 1) sets how many things a koala makes a day. `GROVE_COMPUTER=off`
+turns the box off.
 
 ### The public API (read-only)
 
@@ -435,6 +476,12 @@ All settings are environment variables.
 | `GROVE_AUTOSTART` | `1` | `0` keeps a fresh grove paused on start, even on instinct. |
 | `GROVE_GITHUB_REPO` | (off) | `owner/name` of the koalas' own repository, where each commits its life once a day. |
 | `GROVE_GITHUB_TOKEN` | (off) | A fine-grained token with Contents read/write on that one repository only. |
+| `GROVE_COMPUTER` | on | `off` turns off the koalas' sealed Docker computers (they then make things untested). |
+| `GROVE_COMPUTER_IMAGE` | `node:24-alpine` | The image of each koala's box (pulled once if missing). |
+| `GROVE_DOCKER` | `docker` | The Docker executable. |
+| `GROVE_MAKES_PER_DAY` | `1` | Things each koala makes at its computer a day (1 to 10). |
+| `GROVE_MAKE_USD` | `0.25` | Spending cap per making call, passed to `--max-budget-usd` (at most 2). |
+| `GROVE_MAKE_MODEL` | `GROVE_MODEL` | Model a koala makes things with. |
 | `GROVE_PUBLIC_HOSTS` | (none) | Comma-separated host names (a tunnel) allowed to read the public `/api/v1`, and nothing else. |
 | `GROVE_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama for free new library pages and nightly diaries; `off` turns it off. |
 | `GROVE_OLLAMA_MODEL` | (auto) | Which installed Ollama model to use; empty picks one (gemma4, llama3.2, qwen2.5, ...). |

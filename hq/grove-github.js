@@ -61,7 +61,7 @@ export const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').r
 const list = (xs, empty = '- nothing yet') => (xs.length ? xs.map((x) => `- ${x}`).join('\n') : empty);
 
 // A koala's profile page.
-export function profileMd(k, mind, who, projects) {
+export function profileMd(k, mind, who, projects, makes = []) {
   return `# ${k.name}
 
 Stage: ${who.stage}. Mind: ${who.wisdom}. Lives in the Koala Grove. Friend: ${who.friend ?? 'nobody yet'}${k.opinion ? ` ("${k.opinion}")` : ''}.
@@ -84,7 +84,7 @@ ${k.wish || 'I have not found one yet.'}
 ## My projects
 ${list(projects.map((p) => `[${p.title}](projects/${p.slug}/README.md)`))}
 
-## Things I remember
+${makes.length ? `## Things I made on my computer\n${list(makes.map((m) => `[${m.title}](makes/${m.slug}/README.md) (${m.kind})`))}\n\n` : ''}## Things I remember
 ${list(mind.long.map((m) => m.text))}
 
 _Written by ${k.name} on day ${who.day} of the grove. The [diary](diary/) has one page a day; [mind.json](mind.json) is how I am inside right now._
@@ -125,4 +125,26 @@ ${koalas.map((k) => `- [${k.name}](${k.id}/README.md)`).join('\n')}
 
 _Last updated on day ${day} of the grove._
 `;
+}
+
+// The page for something a koala made at its own computer: what it is, in its own words,
+// how to open it, and what happened when it was tested in the sealed box.
+export function makeMd(k, m) {
+  const files = Object.keys(m.files ?? {}).sort();
+  const tested = !m.test ? 'There is no test for this one.'
+    : m.result == null ? `Not tested today: my computer was not on. The test is \`${m.test}\`.`
+    : m.result.ok ? `I tested it on my computer with \`${m.test}\` and it works.`
+    : `I tested it on my computer with \`${m.test}\` and it ${m.result.timedOut ? 'took too long' : 'did not pass yet'}:\n\n\`\`\`\n${m.result.output.slice(-1500)}\n\`\`\``;
+  return `# ${m.title}
+
+_A ${m.kind || 'thing'} ${k.name} made, ${m.updated === m.started ? `on ${m.started}` : `started ${m.started}, last worked on ${m.updated}`}._
+
+${m.description}
+
+${files.includes('index.html') ? 'Open [index.html](index.html) in a browser to use it.\n\n' : ''}## Files
+${list(files.map((f) => `[${f}](${f})`))}
+
+## Did it work?
+${tested}
+${m.next ? `\n## What I want to try next\n${m.next}\n` : ''}`;
 }

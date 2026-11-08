@@ -11,6 +11,8 @@ PORT=${PORT:-4317}
 # launchd starts with a bare PATH; keep node's and claude's folders on it.
 CLAUDE_DIR=$(dirname "$(command -v claude)")
 NODE_DIR=$(dirname "$NODE")
+# and Docker's, so each koala's computer (the sealed box it tests what it makes in) works
+DOCKER_DIR=$(dirname "$(command -v docker || echo /usr/local/bin/docker)")
 
 mkdir -p "$ROOT/logs" "$HOME/Library/LaunchAgents" "$HOME/Applications"
 
@@ -25,7 +27,7 @@ cat > "$PLIST" <<PLIST
   <key>WorkingDirectory</key><string>$ROOT</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>$CLAUDE_DIR:$NODE_DIR:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>$CLAUDE_DIR:$NODE_DIR:$DOCKER_DIR:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>PORT</key><string>$PORT</string>
   </dict>
   <key>RunAtLoad</key><true/>
