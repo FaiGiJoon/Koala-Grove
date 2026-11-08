@@ -67,7 +67,8 @@ function readJson(req) {
 }
 
 // The grove server: its API, the live event stream and the page. Localhost only.
-export function createApp({ grove, publicDir, google = null }) {
+// publicHosts: extra Host names (say, a tunnel) that may reach the read-only /api/v1 only.
+export function createApp({ grove, publicDir, google = null, publicHosts = [] }) {
   const root = path.resolve(publicDir);
   const clients = new Set();
 
@@ -163,6 +164,14 @@ export function createApp({ grove, publicDir, google = null }) {
       if (type !== 'application/json') throw new HttpError(415, 'content-type must be application/json');
     }
     if (pathname === '/api/events' && method === 'GET') return sse(req, res);
+    // The read-only public API: anyone may read the koalas' lives (GET only, no cookies).
+    if (pathname.startsWith('/api/v1/')) {
+      if (method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET' }); return res.end(); }
+      if (method !== 'GET') throw new HttpError(405, 'the public API is read-only');
+      const data = refuse(() => grove.publicApi(pathname.slice('/api/v1/'.length), { koala: query.get('koala') ?? '', limit: query.get('limit') }));
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      return sendJson(res, 200, data);
+    }
     if (pathname === '/api/dashboard' || pathname.startsWith('/api/google/')) return owner(req, res, pathname, query, port);
     if (pathname === '/api/grove' && method === 'GET') return sendJson(res, 200, grove.state());
     if (method === 'POST') {
@@ -223,15 +232,18 @@ export function createApp({ grove, publicDir, google = null }) {
   const server = http.createServer(async (req, res) => {
     try {
       const { port } = server.address();
-      if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) {
+      const rawUrl = (req.url || '/').split('#')[0];
+      const rawPath = rawUrl.split('?')[0];
+      // the read-only public API may be read from any page, and through a configured tunnel
+      const open = rawPath.startsWith('/api/v1/') && (req.method === 'GET' || req.method === 'OPTIONS');
+      const local = req.headers.host === `127.0.0.1:${port}` || req.headers.host === `localhost:${port}`;
+      if (!local && !(open && publicHosts.includes(req.headers.host))) {
         throw new HttpError(403, 'forbidden host');
       }
       const { origin } = req.headers;
-      if (origin !== undefined && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
+      if (!open && origin !== undefined && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
         throw new HttpError(403, 'forbidden origin');
       }
-      const rawUrl = (req.url || '/').split('#')[0];
-      const rawPath = rawUrl.split('?')[0];
       const query = new URLSearchParams(rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '');
       if (rawPath === '/api' || rawPath.startsWith('/api/')) await api(req, res, rawPath, query, port);
       else await serveStatic(req, res, rawPath);

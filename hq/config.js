@@ -28,6 +28,8 @@ export function brainMode(raw) {
 
 export default {
   port: positiveNumber('PORT', env.PORT, 4317, { integer: true, max: 65535 }),
+  // Host names (e.g. a Tailscale Funnel or Cloudflare tunnel) that may read the public /api/v1
+  publicHosts: (env.GROVE_PUBLIC_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean),
   // Two koalas on real model calls; GROVE_DAY_USD caps today's real spend.
   grove: {
     brain: brainMode(env.GROVE_BRAIN),
@@ -36,6 +38,13 @@ export default {
     localReadsPerDay: positiveNumber('GROVE_LOCAL_READS_PER_DAY', env.GROVE_LOCAL_READS_PER_DAY, 48, { integer: true, max: 1000 }),
     // a never-played grove wakes by itself when the brain needs no tokens
     autoStart: env.GROVE_AUTOSTART !== '0',
+    // a model on this computer (Ollama) writes new library pages and nightly diaries for free;
+    // 'off' turns it off, and when Ollama is not running the koalas use their own bookshelf
+    ollamaUrl: env.GROVE_OLLAMA_URL === 'off' ? '' : env.GROVE_OLLAMA_URL || 'http://127.0.0.1:11434',
+    ollamaModel: env.GROVE_OLLAMA_MODEL || '',
+    // the koalas' own GitHub: a fine-grained token with Contents read/write on one repository
+    githubToken: env.GROVE_GITHUB_TOKEN || '',
+    githubRepo: env.GROVE_GITHUB_REPO || '',
     model: env.GROVE_MODEL || 'claude-haiku-5-5',
     bin: env.GROVE_BIN || env.CLAUDE_BIN || 'claude',
     callUsd: positiveNumber('GROVE_CALL_USD', env.GROVE_CALL_USD, 0.05, { max: 1 }),

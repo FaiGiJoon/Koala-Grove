@@ -647,6 +647,8 @@ export function relevantLearned(k, n = PROMPT_LEARNED) {
 }
 
 // What a koala knows about its own mind: how clever it is, who it is becoming, what it knows.
+import { innerLines } from './grove-mind.js';
+
 function mindLines(k) {
   const w = wisdomOf(k);
   const known = (k.learned ?? []).length;
@@ -654,6 +656,7 @@ function mindLines(k) {
     `Your mind: you are a ${w.wisdomLabel.toLowerCase()} (wisdom ${Math.round(w.wisdom)}${w.nextWisdom ? `; a ${w.nextWisdom.label.toLowerCase()} at ${w.nextWisdom.at}` : ''}). You know ${known} thing${known === 1 ? '' : 's'}.`,
     (k.traits ?? []).length ? `Who you are becoming: ${k.traits.join('; ')}.` : 'You are still finding out who you are.',
     (k.curiosities ?? []).length ? `Lately you wonder about: ${k.curiosities.join(', ')}.` : '',
+    ...innerLines(k),
     '',
     'Things you learned:',
     ...(known ? relevantLearned(k).map((m) => `- ${m}`) : ['- nothing yet']),

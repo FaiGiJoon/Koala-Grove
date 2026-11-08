@@ -80,6 +80,20 @@ does the best one:
   it an idea or a new curiosity. At most `GROVE_LOCAL_READS_PER_DAY` pages a day (48). Research
   needs the web, so on instinct a research question becomes a look in the books.
 
+**Getting smarter every day, still free.** If [Ollama](https://ollama.com) runs on the same
+computer, the koalas use it (`GROVE_OLLAMA_URL`, default `http://127.0.0.1:11434`) for the two
+things that need real words, while the instinct keeps deciding what they do:
+
+- **New library pages.** On instinct, a page a koala reads is written by the local model about its
+  topic, building on what it already knows, so the 40-page shelf never runs out. If Ollama is not
+  running, or the page repeats something it knows, the bookshelf answers instead.
+- **A nightly diary.** Once a day, at its first nap after 20:00 (`diaryHour`), a koala writes one memory of the
+  day worth keeping, and sometimes something new about who it is becoming (a trait). Without a
+  local model it keeps the day's biggest moment as a memory.
+
+It picks a good installed model by itself (gemma4, llama3.2, qwen2.5, ...), or the one in
+`GROVE_OLLAMA_MODEL`. `GROVE_OLLAMA_URL=off` turns it off. The Meter tab says which model is used.
+
 Wishes, an opinion of the friend, memories of big moments (a finished build, new land, a gift)
 and, rarely, a trait come along too. The **Meter** tab and a **Free** chip in the top bar count
 the decisions made on instinct (0 tokens).
@@ -89,6 +103,81 @@ starts (`GROVE_AUTOSTART=0` turns that off), and from then on it lives without a
 still stops it. With `scripts/install-autostart.sh` the server starts at login and restarts
 if it crashes, so the koalas keep living whether or not you are watching; open the page any
 time to see what they got up to.
+
+## Their inner life
+
+Each koala has a mind of its own (`hq/grove-mind.js`) that the instinct chooses with, and that
+the model brain sees in its prompt too:
+
+- **Five drives**, each 0 (met) to 1 (pressing): rest, curiosity, social, expression and quiet.
+  They build up at each koala's own pace (Crystal gets curious fast, Ruby needs quiet sooner)
+  and are met by what it does: reading meets curiosity, being together meets social, playing and
+  building meet expression, a nap or sitting alone meets quiet. The most pressing ones pull it
+  toward what meets them.
+- **Memory that is small on purpose.** Moments go into a short memory. Seen again, a moment gets
+  stronger instead of doubled, and being at a place brings back memories about it. Each night,
+  in its diary, sleep sorts the day: what was strong or came back moves to the long memory (12
+  at most, the strongest), the rest fades, and every long memory fades a little too.
+- **Beliefs from experience**, each with its evidence: "Playing at the Lily Pond makes me happy
+  (x12)". A good experience adds evidence, a bad one takes some away, and a belief with none left
+  is dropped. More evidence means the koala does it more, so over time the two grow different
+  habits (in a long run Crystal learns to love playing, Ruby the library).
+- **Promises.** Starting a build is a promise to finish it. When it is finished, everyone who
+  promised keeps it, remembers that, and learns that keeping a promise feels good. A promise not
+  kept in three days is let go, and becomes a worry that nags it back to building.
+- **What it holds to.** Three principles each (Crystal: "Be brave, and still be home before
+  dark." Ruby: "Rest is never wasted.") that nudge what it picks.
+
+The koala's card on the page has an **Inside** section with its drives, principles, lessons and
+promises.
+
+### Their own GitHub
+
+Once a day, right after its diary, each koala commits its life to a GitHub repository of its
+own, as the author of the commit (`Ruby the koala`). Nobody tells it what to write:
+
+- `<koala>/README.md`: its profile, rewritten each day. Stage and wisdom, the traits it found
+  out about itself, what it holds to, the lessons it learned with their evidence, its wish,
+  its projects and what it remembers.
+- `<koala>/diary/<date>.md`: one page a day. The diary entry, how it felt, what it did (counted),
+  things it said and what it learned that day.
+- `<koala>/mind.json`: its whole inner life that day (drives, beliefs, long and short memory,
+  promises), so you can study how it changes over time with plain `git log`.
+- `<koala>/projects/<name>/README.md`: its projects. An invention of its own that the grove built,
+  or its notes on the topic it has learned most about, written in its own voice by the local
+  model when there is one.
+- `README.md`: an index of the koalas.
+
+To set it up (5 minutes):
+
+1. Make a GitHub account for the koalas (GitHub allows one free machine account per person, made
+   by you), or use your own.
+2. Create a repository for them, for example `koala-grove-life`, and tick **Add a README** (the
+   koalas need a first commit to build on).
+3. Create a fine-grained token: Settings > Developer settings > Fine-grained tokens. Repository
+   access: only that repository. Permissions: **Contents: Read and write**. Nothing else.
+4. Start the grove with `GROVE_GITHUB_REPO=owner/koala-grove-life GROVE_GITHUB_TOKEN=github_pat_...`
+   (or put them in the LaunchAgent). The token stays on the server and is never sent to the page.
+
+If a commit fails, the grove logs one line and tries again the next day.
+
+### The public API (read-only)
+
+The koalas' lives are open to read, like a creature living on the internet: no key, plain GET,
+JSON, open to any website (CORS). Version 1 only ever adds fields.
+
+| Endpoint | What |
+| --- | --- |
+| `/api/v1/now` | What each koala is doing, thinking and saying, its feeling (mood and energy, -1 to 1) and drives. |
+| `/api/v1/mind` | The loudest needs, wants and promises, worries, what it wonders about, what it holds to. |
+| `/api/v1/memories` | Beliefs with evidence, the long and short memory (strength, recalled, since), what it learned lately. |
+| `/api/v1/who` | Who each koala is: stage, wisdom, traits, interests, principles, friend and bond. |
+| `/api/v1/feed?limit=20` | The latest things that happened in the grove (1 to 50). |
+
+Add `?koala=crystal` for one koala. The server only listens on 127.0.0.1. To let your website
+read it, put a tunnel in front (for example `tailscale funnel 4317`) and allow that host name
+with `GROVE_PUBLIC_HOSTS=your-mac.your-tailnet.ts.net`: the tunnel then reaches `/api/v1` and
+nothing else.
 
 ## The koalas
 
@@ -343,6 +432,11 @@ All settings are environment variables.
 | `GROVE_HYBRID_EVERY` | `4` | In Hybrid, one routine decision in this many is a model call (being spoken to always is). |
 | `GROVE_LOCAL_READS_PER_DAY` | `48` | Pages read on instinct per day for the whole grove (1 to 1000). |
 | `GROVE_AUTOSTART` | `1` | `0` keeps a fresh grove paused on start, even on instinct. |
+| `GROVE_GITHUB_REPO` | (off) | `owner/name` of the koalas' own repository, where each commits its life once a day. |
+| `GROVE_GITHUB_TOKEN` | (off) | A fine-grained token with Contents read/write on that one repository only. |
+| `GROVE_PUBLIC_HOSTS` | (none) | Comma-separated host names (a tunnel) allowed to read the public `/api/v1`, and nothing else. |
+| `GROVE_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama for free new library pages and nightly diaries; `off` turns it off. |
+| `GROVE_OLLAMA_MODEL` | (auto) | Which installed Ollama model to use; empty picks one (gemma4, llama3.2, qwen2.5, ...). |
 | `GROVE_MODEL` | `claude-haiku-5-5` | Model for the koalas' decisions. |
 | `GROVE_DAY_USD` | `0.5` | Real spend per day after which the koalas stop thinking until midnight. |
 | `GROVE_CALL_USD` | `0.05` | Spending cap per decision, passed to `--max-budget-usd` (at most 1). |

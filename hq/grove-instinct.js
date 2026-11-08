@@ -10,6 +10,7 @@ import {
 import { SOURCES, OPEN_ISLANDS, costOf, stockOf, held, canAfford, bridged } from './grove-economy.js';
 import { canNest } from './grove-family.js';
 import { designSpec, designCost } from './grove-design.js';
+import { needsOf, beliefBoost, holdsTo, HOLDS_BIAS, mindOf, habituation } from './grove-mind.js';
 
 // How each founder leans. Weights multiply the base score of an urge; 1 is neutral.
 // A koala born in the grove gets an even mix (see temperOf).
@@ -302,6 +303,30 @@ export function instinctDecide(world, id, clock = { phase: 'day' }, rng = Math.r
   const roam = Object.keys(places).filter((p) => p !== k.place && !places[p].build);
   if (roam.length && k.energy > 30) add(14 * t.explore, { action: 'move', target: pick(roam, rng), mood: 'curious', thought: 'Let us see what is over there.', say: rng() < 0.3 ? say('explore') : '' });
   add(6, { action: 'sit', mood: 'content', thought: 'I will just sit and look around.', say: '' });
+
+  // The inner life: pressing drives pull toward what meets them, experience (beliefs with
+  // evidence) toward what went well before here, and each koala's principles nudge too.
+  const needs = needsOf(k);
+  const holds = holdsTo(k).map((h) => HOLDS_BIAS[h] ?? {});
+  const DRIVE_W = { curiosity: 30, social: 28, expression: 22, quiet: 22 };
+  for (const o of opts) {
+    const d = o.d;
+    const explore = d.action === 'move' && d.thought?.startsWith('Let us see');
+    const tag = d.action === 'read' || (d.action === 'move' && (d.target === 'library_isle' || explore)) ? 'curiosity'
+      : d.action === 'approach' || d.action === 'give' || (d.action === 'sit' && together) ? 'social'
+        : d.action === 'play' || (d.action === 'build' && d.target === 'new') ? 'expression'
+          : d.action === 'nap' || (d.action === 'sit' && !together) || (d.action === 'move' && d.target === home) ? 'quiet' : null;
+    if (tag) o.score += needs[tag] * DRIVE_W[tag];
+    o.score += beliefBoost(k, d, k.place) * 1.5;
+    for (const h of holds) {
+      if (h[d.action]) o.score += h[d.action];
+      if (h.home_at_night && night && d.action === 'move' && d.target === home) o.score += h.home_at_night;
+      if (h.explore && explore) o.score += h.explore;
+    }
+  }
+  if (mindOf(k).worries.length) for (const o of opts) if (o.d.action === 'build') o.score += 6; // a broken promise nags
+  // Getting used to things: fun done too often loses its shine (needs and work do not).
+  for (const o of opts) if (['play', 'approach', 'climb', 'move', 'sit', 'read'].includes(o.d.action)) o.score -= habituation(k, o.d.action) * 3.5;
 
   // Doing the same thing over and over gets boring (work and sleep excepted).
   for (const o of opts) if (o.d.action === k.activity && !['nap', 'build', 'gather', 'eat', 'store'].includes(o.d.action)) o.score -= 20;

@@ -10,10 +10,13 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import {
   KOALAS, ITEMS, BLUEPRINTS, PLOTS, LANDS, placesOf, landOf, newKoala, friendOf, RENAMED, migrateNames, SIGHTINGS, parseDecision, applyDecision, drift, groveClock, DAY_MS, buildPrompt, systemPrompt, canReadAt, growthOf, carryLimit,
-  wisdomOf, relevantLearned, interestsOf, MAX_LEARNED, MAX_CURIOSITIES,
+  wisdomOf, relevantLearned, interestsOf, MAX_LEARNED, MAX_CURIOSITIES, MAX_TRAITS,
 } from './grove-world.js';
 import { koalaArgs, researchArgs, readArgs, think as callClaude } from './grove-brain.js';
 import { instinctDecide, instinctRead } from './grove-instinct.js';
+import { createLocalLlm } from './grove-local-llm.js';
+import { driftMind, experience, onBuilt, notice, consolidate, publicMind, mindOf, holdsTo, strongestToday } from './grove-mind.js';
+import { createGithub, slug, profileMd, diaryMd, projectMd, rootMd } from './grove-github.js';
 import { RESOURCES, ISLANDS, COSTS, START_STOCK, held, bridged, stockOf } from './grove-economy.js';
 import { BABY_NAMES, babyPersona, bornBaby, graduates } from './grove-family.js';
 import { designCost } from './grove-design.js';
@@ -30,6 +33,11 @@ export const GROVE_DEFAULTS = {
   hybridEvery: 4,
   localReadsPerDay: 48, // books read on instinct cost nothing, but a day has only so many pages
   autoStart: false, // wake a fresh grove on start when the brain needs no tokens
+  ollamaUrl: '', // a local model (Ollama) for new library pages and nightly diaries; '' is off
+  ollamaModel: '', // '' picks a good installed one
+  diaryHour: 20, // the diary is written at the first nap after this hour (local time), once a day
+  githubToken: '', // the koalas' own GitHub: a fine-grained token for one repository
+  githubRepo: '', // owner/name of that repository; both empty is off
   model: 'claude-haiku-5-5',
   callUsd: 0.05, // --max-budget-usd for one decision
   dayUsd: 0.5, // no new calls once today's real spend reaches this
@@ -81,11 +89,16 @@ export class Grove {
   #wasPresent = false;
   #failures = 0;
 
-  constructor({ path = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random } = {}) {
+  constructor({ path = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random, localLlm = undefined, github = undefined } = {}) {
     this.config = { ...GROVE_DEFAULTS, ...config };
     this.now = now;
     this.rng = rng;
     this.brain = think ?? ((req) => this.#callClaude(req));
+    // free learning on this computer: new pages and diaries (null when not configured)
+    this.localLlm = localLlm !== undefined ? localLlm
+      : this.config.ollamaUrl ? createLocalLlm({ url: this.config.ollamaUrl, model: this.config.ollamaModel, now }) : null;
+    // the koalas' own GitHub, where each one commits its life once a day (null when off)
+    this.github = github !== undefined ? github : createGithub({ token: this.config.githubToken, repo: this.config.githubRepo });
 
     const db = (this.db = new DatabaseSync(path));
     db.exec(`
@@ -113,6 +126,7 @@ export class Grove {
       usageSince: p('SELECT * FROM grove_usage WHERE ts >= ? ORDER BY id'),
       allUsage: p('SELECT * FROM grove_usage ORDER BY id'),
       allLog: p('SELECT * FROM grove_log ORDER BY id'),
+      koalaLogSince: p('SELECT kind, text, action, ts FROM grove_log WHERE koala = ? AND ts >= ? ORDER BY id'),
       failures: p("SELECT ts, koala, text FROM grove_log WHERE kind = 'error' AND ts >= ? ORDER BY id DESC"),
       feed: p("SELECT * FROM grove_log WHERE kind IN ('think', 'act', 'say', 'learn', 'grow', 'error', 'ticket', 'remember') ORDER BY id DESC LIMIT ?"),
       sums: p(`SELECT koala, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost, COALESCE(SUM(tokens_in), 0) AS tokens_in,
@@ -295,6 +309,7 @@ export class Grove {
       const minutes = Math.min(2, (now - this.#lastDrift) / 60000);
       for (const k of this.#all()) {
         drift(this.world.koalas[k.id], minutes);
+        driftMind(this.world.koalas[k.id], minutes);
         if (k.follows) k.strength = Math.min(100, k.strength + minutes); // babies grow by being looked after
         this.#save(k.id);
       }
@@ -303,6 +318,7 @@ export class Grove {
     if (active) {
       this.#sightings();
       this.#family();
+      this.#diaries();
     }
     if (present !== this.#wasPresent) {
       this.#wasPresent = present;
@@ -319,6 +335,139 @@ export class Grove {
   #minute() {
     const c = this.clock();
     return (c.day - 1) * 1440 + c.hour * 60 + c.minute;
+  }
+
+  // Once a day, when a koala settles down to sleep, it writes its diary: one memory of the
+  // day worth keeping, and sometimes something new about who it is becoming. The computer's
+  // own model writes it when there is one; else the instinct keeps the day's biggest moment.
+  #diaries() {
+    if (new Date(this.now()).getHours() < this.config.diaryHour) return; // the day is not over yet
+    const day = startOfDay(this.now());
+    const done = this.#meta('diary', {});
+    for (const k of this.#thinkers()) {
+      if (k.activity !== 'nap' || done[k.id] === day) continue;
+      done[k.id] = day;
+      this.#setMeta('diary', done);
+      const job = this.#diary(k.id)
+        .catch((err) => console.error('grove diary failed:', err))
+        .finally(() => this.#inflight.delete(job));
+      this.#inflight.add(job);
+    }
+  }
+
+  async #diary(id) {
+    const k = this.world.koalas[id];
+    const f = this.#all().find((o) => o.id !== id);
+    let entry = null;
+    if (this.localLlm) {
+      const prompt = [
+        `You are ${k.name}, a ${wisdomOf(k).wisdomLabel.toLowerCase()} koala, curious about ${interestsOf(k).join(', ') || 'everything'}.`,
+        (k.traits ?? []).length ? `Who you are: ${k.traits.join('; ')}.` : 'You are still finding out who you are.',
+        `What you already remember: ${(k.memories ?? []).slice(-6).join(' | ') || 'nothing yet'}.`,
+        `What happened today: ${(k.recent ?? []).join(' | ') || 'a quiet day'}.`,
+        (k.learned ?? []).length ? `Things you learned lately: ${k.learned.slice(-3).join(' | ')}.` : '',
+        f ? `Your friend is ${f.name}; how you feel about them: ${k.opinion || 'still deciding'}.` : '',
+        'Write memory: one sentence (under 140 characters) about today worth remembering for a long time, different from what you already remember.',
+        'Write trait: something new you found out about who you are, in one short sentence, or empty if nothing new.',
+      ].filter(Boolean).join('\n');
+      try { entry = await this.localLlm.diary(prompt); } catch { entry = null; }
+    }
+    if (!entry) {
+      const big = [...(k.recent ?? [])].reverse().find((e) => /finished the|rose from the water|was born|gave you|you read|found out|grew wiser/i.test(e));
+      const top = big ? big.replace(/^You /, 'I ') : strongestToday(k);
+      entry = { memory: top.slice(0, 140), trait: '' };
+    }
+    const memory = entry.memory.replace(/\s+/g, ' ').slice(0, 140);
+    // the diary entry is a strong memory; then sleep sorts the day: what mattered stays
+    if (memory) notice(k, memory, 'moment', this.now(), 3);
+    consolidate(k, this.now());
+    if (!memory) { this.#save(id); this.#publish(id, ''); return; }
+    const trait = entry.trait.replace(/\s+/g, ' ').slice(0, 120);
+    if (trait && !(k.traits ?? []).some((t) => t.toLowerCase() === trait.toLowerCase())) {
+      k.traits = [...(k.traits ?? []), trait].slice(-MAX_TRAITS);
+      this.#log({ koala: id, kind: 'grow', text: `${k.name} found out something new about who they are: ${trait}` });
+    }
+    this.#save(id);
+    this.#log({ koala: id, kind: 'learn', text: `${k.name} wrote in the diary: ${memory}` });
+    this.#publish(id, memory);
+  }
+
+  // --- the koalas' own GitHub ------------------------------------------------------------
+  #pub = Promise.resolve();
+  #publish(id, entry) {
+    if (!this.github) return;
+    const job = (this.#pub = this.#pub.then(() => this.#commitLife(id, entry)).catch((err) => {
+      this.#log({ koala: id, kind: 'system', text: `${this.world.koalas[id].name} could not write to GitHub: ${err.message.slice(0, 160)}` });
+    }));
+    this.#inflight.add(job);
+    job.finally(() => this.#inflight.delete(job));
+  }
+
+  // What a koala did today, from the log.
+  #today(id) {
+    const rows = this.q.koalaLogSince.all(id, startOfDay(this.now()));
+    const actions = {};
+    for (const r of rows) if (r.kind === 'act' && r.action) actions[r.action] = (actions[r.action] ?? 0) + 1;
+    return {
+      actions,
+      said: rows.filter((r) => r.kind === 'say').map((r) => r.text),
+      learned: rows.filter((r) => r.kind === 'learn' && !/wrote in the diary/.test(r.text)).map((r) => r.text.replace(/^[^:]+:\s*/, '')).slice(-8),
+    };
+  }
+
+  // Today's project: the koala's own invention it finished, else the topic it has learned
+  // most about (a new project, or new notes on one it already has).
+  async #project(id) {
+    const k = this.world.koalas[id];
+    const m = mindOf(k);
+    m.projects ??= [];
+    const date = new Date(this.now()).toISOString().slice(0, 10);
+    const mine = (this.world.builds ?? []).find((b) => b.done && b.kind === 'custom' && b.by === id && !m.projects.some((p) => p.build === b.id));
+    let p;
+    if (mine) {
+      p = { slug: slug(mine.title), title: mine.title, kind: 'invention', build: mine.id, started: date, notes: [] };
+      p.body = `I thought of this myself and we built it in the grove: ${String(mine.spec?.design ?? mine.title).replace(/\.+$/, '')}.`;
+    } else {
+      const studies = Object.entries(m.studies ?? {}).filter(([, facts]) => facts.length >= 2).sort((a, b) => b[1].length - a[1].length);
+      if (!studies.length) return null;
+      const [topic, facts] = studies[0];
+      p = m.projects.find((x) => x.topic === topic) ?? { slug: slug(`notes on ${topic}`), title: `My notes on ${topic}`, kind: 'study', topic, started: date };
+      p.notes = facts;
+      p.body = `I have been reading about ${topic} at the library. Here is what I found out so far.`;
+    }
+    if (this.localLlm) {
+      const prompt = [
+        `You are ${k.name}, a koala. Traits: ${(k.traits ?? []).join('; ') || 'still finding out'}. You hold to: ${holdsTo(k).join(' ')}`,
+        p.kind === 'invention' ? `Your project is your own invention, the ${p.title}: ${p.body}` : `Your project is about ${p.topic}. What you know: ${p.notes.join(' ')}`,
+        'Write title (short), body (a few short Markdown paragraphs in your own voice, only true things) and next (one sentence: what you want to try or learn next).',
+      ].join('\n');
+      const w = await this.localLlm.project?.(prompt).catch(() => null);
+      if (w) Object.assign(p, { title: w.title || p.title, body: w.body, next: w.next });
+    }
+    const at = m.projects.findIndex((x) => x.slug === p.slug);
+    if (at >= 0) m.projects[at] = p; else m.projects.push(p);
+    m.projects = m.projects.slice(-20);
+    return p;
+  }
+
+  async #commitLife(id, entry) {
+    const k = this.world.koalas[id];
+    const date = new Date(this.now()).toISOString().slice(0, 10);
+    const project = await this.#project(id);
+    const st = this.state();
+    const who = { ...this.publicApi('who', { koala: id }).koalas[0], day: this.clock().day };
+    const mind = publicMind(k, this.now());
+    const files = {
+      [`${id}/README.md`]: profileMd(k, mind, who, mindOf(k).projects ?? []),
+      [`${id}/diary/${date}.md`]: diaryMd(k, date, entry, this.#today(id), mind),
+      [`${id}/mind.json`]: `${JSON.stringify({ name: k.name, at: mind.at, who, mind }, null, 2)}\n`,
+      'README.md': rootMd(st.koalas, this.clock().day),
+    };
+    if (project) files[`${id}/projects/${project.slug}/README.md`] = projectMd(k, project);
+    this.#save(id);
+    const sha = await this.github.commit(files, `${k.name}: day ${this.clock().day}${project ? `, ${project.title}` : ''}`,
+      { name: `${k.name} the koala`, email: `${id}@koala-grove.invalid` });
+    if (sha) this.#log({ koala: id, kind: 'grow', text: `${k.name} wrote today's page on GitHub${project ? ` and worked on "${project.title}"` : ''}.` });
   }
 
   // Births when a baby is due, and babies old enough to start deciding for themselves.
@@ -420,15 +569,6 @@ export class Grove {
   async #learn(id, topic, { web, offline = false }) {
     const k = this.world.koalas[id];
     const w = wisdomOf(k);
-    if (offline) {
-      const page = instinctRead(k, topic, this.rng);
-      if (!page) {
-        k.recent.push(`You looked through every book about ${topic}, but you know all of it already.`);
-        this.#save(id);
-        return;
-      }
-      return this.#learned(id, topic, page, { web: false });
-    }
     const known = relevantLearned({ ...k, wish: `${k.wish ?? ''} ${topic}` }, 4);
     const about = [
       `${k.name} is a ${w.wisdomLabel.toLowerCase()} koala, curious about ${interestsOf(k).join(', ') || 'everything'}.`,
@@ -439,6 +579,21 @@ export class Grove {
     const prompt = web
       ? `${k.name} the koala asks: ${topic}\n${about}\nAnswer as one fact the koala can remember, one idea for the grove (or empty), and one related topic the koala could wonder about next (or empty).`
       : `${k.name} the koala opens a book about: ${topic}\n${about}\nTell one true thing about it as a fact the koala can remember, one idea for the grove (or empty), and one related topic the koala could wonder about next (or empty).`;
+    if (offline) {
+      // the computer's own model writes a new page if it can; else the instinct's bookshelf
+      let page = null;
+      if (this.localLlm) {
+        try { page = await this.localLlm.read(prompt); } catch { page = null; }
+        if (page && (k.learned ?? []).includes(page.fact.replace(/\s+/g, ' ').slice(0, 280))) page = null;
+      }
+      page ??= instinctRead(k, topic, this.rng);
+      if (!page) {
+        k.recent.push(`You looked through every book about ${topic}, but you know all of it already.`);
+        this.#save(id);
+        return;
+      }
+      return this.#learned(id, topic, page, { web: false });
+    }
     const args = web
       ? researchArgs({ prompt, model: this.config.model, callUsd: this.config.researchUsd })
       : readArgs({ prompt, model: this.config.model, callUsd: this.config.readUsd });
@@ -469,6 +624,12 @@ export class Grove {
     const fact = raw.fact.trim().replace(/\s+/g, ' ').slice(0, 280);
     const idea = typeof raw.idea === 'string' ? raw.idea.trim().replace(/\s+/g, ' ').slice(0, 160) : '';
     k.learned = [...(k.learned ?? []), fact].slice(-MAX_LEARNED);
+    // what it learned, by topic, for its own projects
+    const studies = (mindOf(k).studies ??= {});
+    const t = String(topic).toLowerCase().slice(0, 60);
+    studies[t] = [...(studies[t] ?? []), fact].filter((x, i, a) => a.indexOf(x) === i).slice(-12);
+    const topics = Object.keys(studies);
+    if (topics.length > 10) delete studies[topics[0]];
     const trim = (x) => { if (x.recent.length > 10) x.recent.splice(0, x.recent.length - 10); };
     k.recent.push(`${web ? 'On the web you found out' : 'At the library you read'}: ${fact}${idea ? ` It gave you an idea: ${idea}` : ''}`);
     const before = w.wisdomLabel;
@@ -661,7 +822,19 @@ export class Grove {
       if (!topic) decision.action = 'sit';
     }
     this.world.minute = this.#minute();
-    for (const entry of applyDecision(this.world, id, decision)) this.#log(entry);
+    const logs = applyDecision(this.world, id, decision);
+    for (const entry of logs) this.#log(entry);
+    // the inner life: drives, the moment noticed, lessons learned, promises made and kept
+    {
+      const k = this.world.koalas[id];
+      const f = friendOf(this.world, id);
+      const places = placesOf(this.world);
+      experience(k, decision, {
+        place: k.place, placeName: places[k.place]?.name ?? k.place, friend: f?.name, together: f?.place === k.place,
+        said: !!decision.say, explored: decision.action === 'move', logs, now: this.now(),
+      });
+      for (const e of logs) if (e.kind === 'built') onBuilt(this.#all().map((x) => this.world.koalas[x.id]), e.text, this.now());
+    }
     this.#setMeta('baby', this.world.baby ?? null);
     this.#setMeta('nest', this.world.nest ?? null);
     // babies go wherever the parent they follow goes
@@ -843,6 +1016,51 @@ export class Grove {
     return exportTabs({ koalas: st.koalas, log: this.q.allLog.all(), usage: this.q.allUsage.all(), now: this.now(), model: this.config.model });
   }
 
+  // The read-only public API (/api/v1): the koalas' lives, open to anyone curious.
+  // Version 1 only ever adds fields. koala: one id, or every koala when empty.
+  publicApi(endpoint, { koala = '', limit = 20 } = {}) {
+    const now = this.now();
+    const at = new Date(now).toISOString();
+    const all = this.#all();
+    const pick = koala ? all.filter((k) => k.id === koala) : all;
+    if (koala && !pick.length) throw new GroveError(404, `no koala called ${koala}`);
+    const clock = this.clock();
+    const world = { name: 'Koala Grove', day: clock.day, time: `${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`, phase: clock.phase };
+    const VALENCE = { happy: 0.8, playful: 0.7, excited: 0.8, proud: 0.7, cozy: 0.6, content: 0.4, calm: 0.4, curious: 0.5, sleepy: -0.1, hungry: -0.3, bored: -0.3, lonely: -0.5, sad: -0.6, grumpy: -0.6, scared: -0.7 };
+    const one = (k) => {
+      const m = publicMind(this.world.koalas[k.id], now);
+      const f = friendOf(this.world, k.id);
+      switch (endpoint) {
+        case 'now': return {
+          name: k.name, asleep: k.activity === 'nap', doing: k.activity, at_place: placesOf(this.world)[k.place]?.name ?? k.place,
+          thought: k.thought ?? '', said: k.say ?? '',
+          feeling: { mood: VALENCE[k.mood] ?? 0, energy: Math.round(((k.energy ?? 50) / 50 - 1) * 100) / 100, words: k.mood },
+          needs: m.needs, hunger: Math.round(k.hunger ?? 0) / 100,
+        };
+        case 'mind': return {
+          name: k.name, thought: k.thought ?? '', busy: k.activity,
+          loudest: [{ kind: 'need', subject: m.loudest }, ...(k.wish ? [{ kind: 'want', subject: k.wish }] : []), ...m.promises.map((p) => ({ kind: 'promise', subject: p.subject }))].slice(0, 4),
+          open: { want: k.wish ? 1 : 0, promise: m.promises.length, worry: m.worries.length, question: (k.curiosities ?? []).length, person: f ? 1 : 0 },
+          promises: m.promises, worries: m.worries, wonders: k.curiosities ?? [], holdsTo: m.holdsTo,
+        };
+        case 'memories': return { name: k.name, beliefs: m.beliefs, long: m.long, short: m.short, learned: (k.learned ?? []).slice(-10) };
+        case 'who': return {
+          id: k.id, name: k.name, ...(({ stageLabel, wisdomLabel }) => ({ stage: stageLabel, wisdom: wisdomLabel }))({ ...growthOf(k), ...wisdomOf(k) }),
+          traits: k.traits ?? [], interests: interestsOf(k), holdsTo: m.holdsTo, friend: f?.name ?? null, bond: k.bond ?? 0, opinion: k.opinion ?? '',
+        };
+        default: return null;
+      }
+    };
+    if (endpoint === 'feed') {
+      const n = Math.max(1, Math.min(50, Number(limit) || 20));
+      const rows = this.q.recentLog.all(200).filter((e) => e.kind !== 'error' && e.kind !== 'system' && (!koala || e.koala === koala)).slice(0, n);
+      return { v: 1, at, world,
+        feed: rows.map((e) => ({ at: new Date(e.ts).toISOString(), koala: e.koala, kind: e.kind, text: e.text, ...(e.action ? { action: e.action } : {}) })) };
+    }
+    if (!['now', 'mind', 'memories', 'who'].includes(endpoint)) throw new GroveError(404, 'unknown endpoint');
+    return { v: 1, at, world, koalas: pick.map(one) };
+  }
+
   state() {
     const now = this.now();
     const today = this.#sums(startOfDay(now));
@@ -853,7 +1071,7 @@ export class Grove {
       pausedReason: this.#meta('pausedReason', null),
       present: this.present,
       capped: today.total.cost >= this.config.dayUsd,
-      brain: { mode: this.brainMode, modes: BRAINS, autonomous: this.autonomous, free: this.#freeStats(), hybridEvery: this.config.hybridEvery },
+      brain: { mode: this.brainMode, modes: BRAINS, autonomous: this.autonomous, free: this.#freeStats(), hybridEvery: this.config.hybridEvery, localModel: this.localLlm?.model ?? null },
       clock: this.clock(),
       places: placesOf(this.world),
       items: ITEMS,
@@ -868,8 +1086,9 @@ export class Grove {
       costs: COSTS,
       customCosts: Object.fromEntries(['small', 'medium', 'big'].map((size) => [size, designCost({ size, design: '' })])),
       islands: ISLANDS.map((i) => ({ ...i, bridged: bridged(this.world).has(i.id) })),
-      koalas: this.#all().map((k) => ({
+      koalas: this.#all().map(({ mind, ...k }) => ({
         ...k,
+        inner: (({ long, short, at, ...rest }) => ({ ...rest, beliefs: rest.beliefs.slice(0, 5), remembering: short.length }))(publicMind(this.world.koalas[k.id], now)),
         ...growthOf(k),
         ...wisdomOf(k),
         color: KOALAS.find((f) => f.id === k.id)?.color ?? k.color ?? '#a8a29a',
