@@ -9,9 +9,26 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
 ENV_FILE="$ROOT/data/grove.env"
 mkdir -p "$ROOT/data"
 
+if [ -d /workspaces ] || [ -n "${CODESPACES:-}" ]; then
+  echo "This looks like a GitHub Codespace, not the computer the grove runs on."
+  echo "Run this script in the Terminal on that computer instead (your Mac)."
+  exit 1
+fi
+
 printf 'Repository for the koalas (owner/name) [FaiGiJoon/Repo-for-the-Koala-s]: '
 read -r REPO
 REPO=${REPO:-FaiGiJoon/Repo-for-the-Koala-s}
+case "$REPO" in
+  github_pat_*|ghp_*)
+    echo "That is a token, typed where the repository name goes, so it was shown on screen."
+    echo "Revoke it now at https://github.com/settings/personal-access-tokens, make a new one,"
+    echo "run this again, press Enter at the repository question, and paste the token at the next one."
+    exit 1 ;;
+esac
+if ! printf '%s' "$REPO" | grep -Eq '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$'; then
+  echo "\"$REPO\" is not a repository name. It looks like owner/name; press Enter for the default."
+  exit 1
+fi
 
 printf 'Paste the fine-grained token (it will not be shown): '
 stty -echo 2>/dev/null || true
