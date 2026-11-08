@@ -145,3 +145,54 @@ export function think({ bin, args, cwd, timeoutMs }) {
     child.on('close', (code) => finish(code));
   });
 }
+
+// Making: a koala sits at its own computer and makes whatever it wants, as files in a folder.
+// No tools here either: the answer is the files (and a command to check them), and the grove
+// runs that command in the koala's sealed box (grove-computer.js), never on this computer.
+export const MAKE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'A short name for what you made. The same name as before to keep working on it.' },
+    kind: { type: 'string', description: 'What it is, in a word or two: game, calculator, website, story, tool, art, music, anything.' },
+    description: { type: 'string', description: 'A few short Markdown paragraphs, in your own voice: what it is, why you made it, how to use or play it.' },
+    files: {
+      type: 'array',
+      description: 'Every file of the project: relative paths, plain text (HTML, JS, CSS, SVG, Markdown, JSON...).',
+      items: {
+        type: 'object',
+        properties: { path: { type: 'string' }, content: { type: 'string' } },
+        required: ['path', 'content'],
+        additionalProperties: false,
+      },
+    },
+    test: { type: 'string', description: 'One shell command that checks it works on your computer (for example: node test.js), or empty.' },
+    next: { type: 'string', description: 'One sentence: what you want to add or try next.' },
+  },
+  required: ['title', 'kind', 'description', 'files', 'test', 'next'],
+  additionalProperties: false,
+};
+
+export const MAKE_SYSTEM = 'You are a koala in the Koala Grove, sitting at your very own computer. Nobody tells you what to make: '
+  + 'make whatever you really want, from who you are. It can be anything that lives as text files in a folder: a game to play '
+  + 'in the browser, a calculator, a website, a tool, a story, a poem, a song as notes, a drawing as SVG, a little simulation. '
+  + 'Your computer has Node 24 and a POSIX shell, no internet and no npm packages, so use only plain HTML, CSS and JavaScript '
+  + '(or other plain text). Anything for the browser goes in index.html. Keep it small enough to finish today and make it '
+  + 'really work. If it has logic, write a small test with node:assert and give the command that runs it. '
+  + 'Everything you make goes on your own GitHub for anyone to see, so keep it kind.';
+
+export function makeArgs({ prompt, model, callUsd }) {
+  return [
+    '-p', prompt,
+    '--output-format', 'json',
+    '--model', model,
+    '--system-prompt', MAKE_SYSTEM,
+    '--json-schema', JSON.stringify(MAKE_SCHEMA),
+    '--tools', '',
+    '--setting-sources', '',
+    '--strict-mcp-config',
+    '--disable-slash-commands',
+    '--permission-mode', 'dontAsk',
+    '--no-session-persistence',
+    '--max-budget-usd', String(callUsd),
+  ];
+}

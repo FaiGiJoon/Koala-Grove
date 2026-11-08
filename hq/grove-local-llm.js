@@ -60,10 +60,10 @@ export function createLocalLlm({ url = 'http://127.0.0.1:11434', model = '', fet
     return cached.model;
   }
 
-  async function ask(system, prompt, schema) {
+  async function ask(system, prompt, schema, ms = timeoutMs) {
     const m = await available();
     if (!m) return null;
-    const out = await call('/api/generate', { model: m, system, prompt, format: schema, stream: false, options: { temperature: 0.7 } }, timeoutMs);
+    const out = await call('/api/generate', { model: m, system, prompt, format: schema, stream: false, options: { temperature: 0.7 } }, ms);
     if (!out?.response) return null;
     try {
       return { model: m, value: JSON.parse(out.response) };
@@ -92,6 +92,13 @@ export function createLocalLlm({ url = 'http://127.0.0.1:11434', model = '', fet
       );
       const body = typeof r?.value?.body === 'string' ? r.value.body.trim() : '';
       return body.length >= 40 ? { title: String(r.value.title ?? '').trim().slice(0, 80), body: body.slice(0, 4000), next: String(r.value.next ?? '').trim().slice(0, 400) } : null;
+    },
+    // Something the koala makes at its computer, in the MAKE_SCHEMA shape, or null. Making takes
+    // longer than a page, so it gets more time (Ollama may run on another computer).
+    async make(system, prompt, schema) {
+      const r = await ask(system, prompt, schema, Math.max(timeoutMs, 300000));
+      const v = r?.value;
+      return v && typeof v.title === 'string' && Array.isArray(v.files) && v.files.length ? { ...v, model: r.model } : null;
     },
     // The koala's diary at the end of a day: { memory, trait } (trait may be empty) or null.
     async diary(prompt) {

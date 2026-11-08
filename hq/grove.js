@@ -7,16 +7,18 @@
 // are kept in sqlite (data/).
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   KOALAS, ITEMS, BLUEPRINTS, PLOTS, LANDS, placesOf, landOf, newKoala, friendOf, RENAMED, migrateNames, SIGHTINGS, parseDecision, applyDecision, drift, groveClock, DAY_MS, buildPrompt, systemPrompt, canReadAt, growthOf, carryLimit,
   wisdomOf, relevantLearned, interestsOf, MAX_LEARNED, MAX_CURIOSITIES, MAX_TRAITS,
 } from './grove-world.js';
-import { koalaArgs, researchArgs, readArgs, think as callClaude } from './grove-brain.js';
+import { koalaArgs, researchArgs, readArgs, makeArgs, MAKE_SYSTEM, MAKE_SCHEMA, think as callClaude } from './grove-brain.js';
+import { createComputer, safeFiles } from './grove-computer.js';
 import { instinctDecide, instinctRead } from './grove-instinct.js';
 import { createLocalLlm } from './grove-local-llm.js';
 import { driftMind, experience, onBuilt, notice, consolidate, publicMind, mindOf, holdsTo, strongestToday } from './grove-mind.js';
-import { createGithub, slug, profileMd, diaryMd, projectMd, rootMd } from './grove-github.js';
+import { createGithub, slug, profileMd, diaryMd, projectMd, rootMd, makeMd } from './grove-github.js';
 import { RESOURCES, ISLANDS, COSTS, START_STOCK, held, bridged, stockOf } from './grove-economy.js';
 import { BABY_NAMES, babyPersona, bornBaby, graduates } from './grove-family.js';
 import { designCost } from './grove-design.js';
@@ -38,6 +40,16 @@ export const GROVE_DEFAULTS = {
   diaryHour: 20, // the diary is written at the first nap after this hour (local time), once a day
   githubToken: '', // the koalas' own GitHub: a fine-grained token for one repository
   githubRepo: '', // owner/name of that repository; both empty is off
+  // each koala's own computer (grove-computer.js): a sealed Docker box to test what it makes
+  computer: false,
+  computerDir: null, // where the project folders live; default work/computers next to workDir
+  computerImage: 'node:24-alpine',
+  docker: 'docker',
+  makesPerDay: 1, // things a koala makes a day, at its evening diary
+  makeUsd: 0.25, // --max-budget-usd for one making call (counts towards dayUsd)
+  makeModel: '', // '' is the koalas' own model
+  makeTimeoutMs: 240000,
+  makeFixes: 1, // when its test fails, how often Claude may fix it the same evening
   model: 'claude-haiku-5-5',
   callUsd: 0.05, // --max-budget-usd for one decision
   dayUsd: 0.5, // no new calls once today's real spend reaches this
@@ -89,7 +101,7 @@ export class Grove {
   #wasPresent = false;
   #failures = 0;
 
-  constructor({ path = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random, localLlm = undefined, github = undefined } = {}) {
+  constructor({ path: dbPath = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random, localLlm = undefined, github = undefined, computer = undefined } = {}) {
     this.config = { ...GROVE_DEFAULTS, ...config };
     this.now = now;
     this.rng = rng;
@@ -99,8 +111,12 @@ export class Grove {
       : this.config.ollamaUrl ? createLocalLlm({ url: this.config.ollamaUrl, model: this.config.ollamaModel, now }) : null;
     // the koalas' own GitHub, where each one commits its life once a day (null when off)
     this.github = github !== undefined ? github : createGithub({ token: this.config.githubToken, repo: this.config.githubRepo });
+    // each koala's own sealed computer to test what it makes (null when off)
+    const c = this.config;
+    this.computer = computer !== undefined ? computer
+      : c.computer ? createComputer({ docker: c.docker, image: c.computerImage, root: c.computerDir ?? path.join(c.workDir ?? 'work', '..', 'computers'), now }) : null;
 
-    const db = (this.db = new DatabaseSync(path));
+    const db = (this.db = new DatabaseSync(dbPath));
     db.exec(`
       CREATE TABLE IF NOT EXISTS grove_koalas (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS grove_log (
@@ -111,12 +127,15 @@ export class Grove {
         cost_usd REAL NOT NULL, tokens_in INTEGER NOT NULL, tokens_out INTEGER NOT NULL, duration_ms INTEGER);
       CREATE INDEX IF NOT EXISTS grove_usage_ts ON grove_usage(ts);
       CREATE TABLE IF NOT EXISTS grove_meta (key TEXT PRIMARY KEY, value TEXT);
+      CREATE TABLE IF NOT EXISTS grove_makes (koala TEXT NOT NULL, slug TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (koala, slug));
     `);
     // Which kind of call a usage row was (decide, read, research): added later, empty on old rows.
     if (!db.prepare('PRAGMA table_info(grove_usage)').all().some((c) => c.name === 'kind')) db.exec('ALTER TABLE grove_usage ADD COLUMN kind TEXT');
     const p = (sql) => db.prepare(sql);
     this.q = {
       koala: p('SELECT data FROM grove_koalas WHERE id = ?'),
+      make: p('SELECT data FROM grove_makes WHERE koala = ? AND slug = ?'),
+      saveMake: p('INSERT INTO grove_makes (koala, slug, data) VALUES (?, ?, ?) ON CONFLICT(koala, slug) DO UPDATE SET data = excluded.data'),
       allKoalas: p('SELECT id, data FROM grove_koalas ORDER BY rowid'),
       saveKoala: p('INSERT INTO grove_koalas (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data'),
       log: p('INSERT INTO grove_log (ts, koala, kind, text, action, target) VALUES (?, ?, ?, ?, ?, ?)'),
@@ -458,24 +477,136 @@ export class Grove {
     return p;
   }
 
+  // --- the koala's own computer -----------------------------------------------------------
+  // At the end of its day a koala may make one thing at its computer: whatever it wants, as
+  // files in a folder (a game, a calculator, a website...). Claude makes it while the brain is
+  // on and a page is open, within the day's budget; else a local model (Ollama) if one answers;
+  // else nothing today. It is tested in the koala's sealed box, then goes on its GitHub.
+  async #make(id) {
+    const k = this.world.koalas[id];
+    const m = mindOf(k);
+    m.makes ??= [];
+    const day = startOfDay(this.now());
+    const count = this.#meta('makes', {});
+    if ((count[id]?.day === day ? count[id].n : 0) >= this.config.makesPerDay) return null;
+    const claude = this.#online();
+    if (!claude && !this.localLlm) return null;
+    count[id] = { day, n: (count[id]?.day === day ? count[id].n : 0) + 1 };
+    this.#setMeta('makes', count);
+
+    const computerOn = this.computer ? await this.computer.available().catch(() => false) : false;
+    const last = m.makes.at(-1);
+    const before = last ? JSON.parse(this.q.make.get(id, last.slug)?.data ?? 'null') : null;
+    const filesText = (files) => {
+      let out = '';
+      for (const [p, text] of Object.entries(files ?? {})) {
+        const chunk = `--- ${p}\n${text}\n`;
+        if (out.length + chunk.length > 24000) { out += `--- ${p} (too long to show)\n`; continue; }
+        out += chunk;
+      }
+      return out;
+    };
+    const prompt = [
+      `You are ${k.name}, a ${wisdomOf(k).wisdomLabel.toLowerCase()} koala.`,
+      (k.traits ?? []).length ? `Who you are: ${k.traits.join('; ')}.` : 'You are still finding out who you are.',
+      `You hold to: ${holdsTo(k).join(' ')}`,
+      `You love and wonder about: ${interestsOf(k).join(', ') || 'everything'}.`,
+      k.wish ? `Your wish: ${k.wish}` : '',
+      (k.learned ?? []).length ? `Things you learned lately: ${k.learned.slice(-4).join(' | ')}` : '',
+      `Today: ${(k.recent ?? []).slice(-5).join(' | ') || 'a quiet day'}.`,
+      m.makes.length ? `Things you made before: ${m.makes.map((x) => `"${x.title}" (${x.kind})`).join(', ')}.` : 'You have never made anything on your computer yet.',
+      before ? `The last thing you made is "${before.title}". Its files now:\n${filesText(before.files)}${before.next ? `You wanted to: ${before.next}` : ''}` : '',
+      computerOn ? 'Your computer is on: your test will really be run.' : 'Your computer is off today, so your test cannot run, but write it anyway.',
+      'Make one thing now. It is up to you: keep working on something you made (use exactly the same title and give all of its files) or start something new.',
+    ].filter(Boolean).join('\n');
+
+    const ask = async (text) => {
+      if (!claude) return this.localLlm.make(MAKE_SYSTEM, text, MAKE_SCHEMA).catch(() => null);
+      const args = makeArgs({ prompt: text, model: this.config.makeModel || this.config.model, callUsd: this.config.makeUsd });
+      let out;
+      try {
+        out = await this.brain({ koala: id, kind: 'make', prompt: text, args, timeoutMs: this.config.makeTimeoutMs });
+      } catch (err) {
+        out = { ok: false, raw: null, usage: null, error: err.message };
+      }
+      let raw = out.raw;
+      if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { raw = null; }
+      }
+      const good = out.ok && raw && typeof raw.title === 'string' && Array.isArray(raw.files);
+      const u = out.usage;
+      if (u) this.q.usage.run(this.now(), id, good ? 1 : 0, u.cost_usd, u.tokens_in, u.tokens_out, u.duration_ms, 'make');
+      if (!good) this.#log({ koala: id, kind: 'error', text: `${k.name} sat at the computer but made nothing: ${String(out.error ?? 'no answer').slice(0, 160)}` });
+      return good ? raw : null;
+    };
+    const shape = (raw) => {
+      const title = String(raw.title).replace(/\s+/g, ' ').trim().slice(0, 80);
+      const { files, dropped } = safeFiles(raw.files);
+      if (!title || !Object.keys(files).length) return null;
+      return {
+        title, slug: slug(title), files, dropped,
+        kind: String(raw.kind ?? '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 30) || 'thing',
+        description: String(raw.description ?? '').trim().slice(0, 6000),
+        test: String(raw.test ?? '').replace(/\s+/g, ' ').trim().slice(0, 300),
+        next: String(raw.next ?? '').replace(/\s+/g, ' ').trim().slice(0, 400),
+      };
+    };
+    const tryIt = async (x) => (computerOn && x.test ? this.computer.test(id, x.slug, x.files, x.test) : null);
+
+    let raw = await ask(prompt);
+    let made = raw && shape(raw);
+    if (!made) return null;
+    let result = await tryIt(made);
+    for (let fix = 0; claude && result && !result.ok && fix < this.config.makeFixes && !this.capped; fix++) {
+      const again = await ask([prompt, '', `You made "${made.title}" with these files:\n${filesText(made.files)}`,
+        `Your test \`${made.test}\` ${result.timedOut ? 'took too long' : 'failed'}. What your computer said:\n${result.output.slice(-3000)}`,
+        `Fix it. Keep the title "${made.title}" and give all of its files again.`].join('\n'));
+      const fixed = again && shape(again);
+      if (!fixed) break;
+      made = { ...fixed, title: made.title, slug: made.slug };
+      result = await tryIt(made);
+    }
+    const date = new Date(this.now()).toISOString().slice(0, 10);
+    const old = JSON.parse(this.q.make.get(id, made.slug)?.data ?? 'null');
+    const entry = { ...made, started: old?.started ?? date, updated: date, result: result && { ok: result.ok, timedOut: result.timedOut, output: result.output } };
+    this.q.saveMake.run(id, made.slug, JSON.stringify(entry));
+    const summary = { slug: made.slug, title: made.title, kind: made.kind, started: entry.started, updated: date, ok: result ? result.ok : null };
+    m.makes = [...m.makes.filter((x) => x.slug !== made.slug), summary].slice(-20);
+    const how = !result ? '' : result.ok ? ' It works!' : ' It does not quite work yet.';
+    k.recent.push(`You ${old ? 'worked on' : 'made'} "${made.title}" (${made.kind}) on your computer.${how}`);
+    if (k.recent.length > 10) k.recent.splice(0, k.recent.length - 10);
+    this.#log({ koala: id, kind: 'grow', text: `${k.name} ${old ? 'worked on' : 'made'} a ${made.kind} on the computer: "${made.title}"${result ? (result.ok ? ', and its test passed' : ', but its test failed') : ''}.` });
+    this.#save(id);
+    return entry;
+  }
+
   async #commitLife(id, entry) {
     const k = this.world.koalas[id];
     const date = new Date(this.now()).toISOString().slice(0, 10);
     const project = await this.#project(id);
+    const made = await this.#make(id).catch((err) => {
+      this.#log({ koala: id, kind: 'error', text: `${k.name} could not make anything today: ${String(err.message).slice(0, 160)}` });
+      return null;
+    });
     const st = this.state();
     const who = { ...this.publicApi('who', { koala: id }).koalas[0], day: this.clock().day };
     const mind = publicMind(k, this.now());
     const files = {
-      [`${id}/README.md`]: profileMd(k, mind, who, mindOf(k).projects ?? []),
+      [`${id}/README.md`]: profileMd(k, mind, who, mindOf(k).projects ?? [], mindOf(k).makes ?? []),
       [`${id}/diary/${date}.md`]: diaryMd(k, date, entry, this.#today(id), mind),
       [`${id}/mind.json`]: `${JSON.stringify({ name: k.name, at: mind.at, who, mind }, null, 2)}\n`,
       'README.md': rootMd(st.koalas, this.clock().day),
     };
     if (project) files[`${id}/projects/${project.slug}/README.md`] = projectMd(k, project);
+    if (made) {
+      for (const [p, text] of Object.entries(made.files)) files[`${id}/makes/${made.slug}/${p}`] = text;
+      files[`${id}/makes/${made.slug}/README.md`] = makeMd(k, made);
+    }
     this.#save(id);
-    const sha = await this.github.commit(files, `${k.name}: day ${this.clock().day}${project ? `, ${project.title}` : ''}`,
+    const what = [project && project.title, made && `made "${made.title}"`].filter(Boolean).join(', ');
+    const sha = await this.github.commit(files, `${k.name}: day ${this.clock().day}${what ? `, ${what}` : ''}`,
       { name: `${k.name} the koala`, email: `${id}@koala-grove.invalid` });
-    if (sha) this.#log({ koala: id, kind: 'grow', text: `${k.name} wrote today's page on GitHub${project ? ` and worked on "${project.title}"` : ''}.` });
+    if (sha) this.#log({ koala: id, kind: 'grow', text: `${k.name} wrote today's page on GitHub${project ? ` and worked on "${project.title}"` : ''}${made ? `${project ? ',' : ' and'} put "${made.title}" up for everyone to see` : ''}.` });
   }
 
   // Births when a baby is due, and babies old enough to start deciding for themselves.
@@ -973,10 +1104,10 @@ export class Grove {
   }
 
   // The real model call, with the user's Claude Code login.
-  async #callClaude({ system, prompt, args = null }) {
+  async #callClaude({ system, prompt, args = null, timeoutMs = null }) {
     const c = this.config;
     if (c.workDir) fs.mkdirSync(c.workDir, { recursive: true });
-    return callClaude({ bin: c.bin, args: args ?? koalaArgs({ system, prompt, model: c.model, callUsd: c.callUsd }), cwd: c.workDir ?? process.cwd(), timeoutMs: c.timeoutMs });
+    return callClaude({ bin: c.bin, args: args ?? koalaArgs({ system, prompt, model: c.model, callUsd: c.callUsd }), cwd: c.workDir ?? process.cwd(), timeoutMs: timeoutMs ?? c.timeoutMs });
   }
 
   // --- reporting -----------------------------------------------------------------------
