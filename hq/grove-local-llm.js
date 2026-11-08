@@ -84,6 +84,15 @@ export function createLocalLlm({ url = 'http://127.0.0.1:11434', model = '', fet
       const fact = typeof r?.value?.fact === 'string' ? r.value.fact.trim() : '';
       return fact.length >= 12 ? { ...r.value, fact, model: r.model } : null;
     },
+    // A project page in the koala's voice: { title, body, next } or null.
+    async project(prompt) {
+      const r = await ask(
+        "You help a small koala write a page for its own project on GitHub, in its own voice: simple, warm, true, a few short paragraphs in Markdown. Use only facts it gives you. Answer only with the JSON asked for.",
+        prompt, { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' }, next: { type: 'string' } }, required: ['title', 'body', 'next'] },
+      );
+      const body = typeof r?.value?.body === 'string' ? r.value.body.trim() : '';
+      return body.length >= 40 ? { title: String(r.value.title ?? '').trim().slice(0, 80), body: body.slice(0, 4000), next: String(r.value.next ?? '').trim().slice(0, 400) } : null;
+    },
     // The koala's diary at the end of a day: { memory, trait } (trait may be empty) or null.
     async diary(prompt) {
       const r = await ask(

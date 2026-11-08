@@ -42,7 +42,7 @@ test('with Ollama down, read and diary answer null instead of throwing', async (
 
 // A grove on instinct with a fake local model that writes a new page every time.
 function setup(localLlm) {
-  let t = Date.UTC(2026, 10, 7, 12);
+  let t = new Date(2026, 10, 7, 19, 30).getTime(); // evening: diary time
   const grove = new Grove({
     config: { brain: 'local', localReadsPerDay: 1000 },
     think: async () => { throw new Error('no model calls on instinct'); },

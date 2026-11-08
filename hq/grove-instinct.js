@@ -10,7 +10,7 @@ import {
 import { SOURCES, OPEN_ISLANDS, costOf, stockOf, held, canAfford, bridged } from './grove-economy.js';
 import { canNest } from './grove-family.js';
 import { designSpec, designCost } from './grove-design.js';
-import { needsOf, beliefBoost, holdsTo, HOLDS_BIAS, mindOf } from './grove-mind.js';
+import { needsOf, beliefBoost, holdsTo, HOLDS_BIAS, mindOf, habituation } from './grove-mind.js';
 
 // How each founder leans. Weights multiply the base score of an urge; 1 is neutral.
 // A koala born in the grove gets an even mix (see temperOf).
@@ -325,6 +325,8 @@ export function instinctDecide(world, id, clock = { phase: 'day' }, rng = Math.r
     }
   }
   if (mindOf(k).worries.length) for (const o of opts) if (o.d.action === 'build') o.score += 6; // a broken promise nags
+  // Getting used to things: fun done too often loses its shine (needs and work do not).
+  for (const o of opts) if (['play', 'approach', 'climb', 'move', 'sit', 'read'].includes(o.d.action)) o.score -= habituation(k, o.d.action) * 3.5;
 
   // Doing the same thing over and over gets boring (work and sleep excepted).
   for (const o of opts) if (o.d.action === k.activity && !['nap', 'build', 'gather', 'eat', 'store'].includes(o.d.action)) o.score -= 20;

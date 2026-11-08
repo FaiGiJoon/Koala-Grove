@@ -35,6 +35,7 @@ export const HOLDS_BIAS = {
 };
 
 const SHORT_MAX = 20; // a day's worth of moments
+export const HABIT_N = 12; // the last moves a koala remembers doing, for getting used to things
 const LONG_MAX = 12; // small on purpose: only what matters stays
 const BELIEFS_MAX = 10;
 const PROMISE_DAYS = 3; // a promise not kept in this many real days is let go, with a worry
@@ -172,6 +173,17 @@ export function keep(k, match, now = Date.now()) {
   return kept;
 }
 
+// The strongest moment of the day so far (for a diary without a local model).
+export function strongestToday(k) {
+  const s = [...mindOf(k).short].sort((a, b) => b.strength + b.recalled - (a.strength + a.recalled));
+  return s[0]?.text ?? '';
+}
+
+// Getting used to things: the more of the last moves were this one, the less it appeals.
+export function habituation(k, action) {
+  return (mindOf(k).habit ?? []).filter((a) => a === action).length;
+}
+
 // Night: short memory is sorted out. What was strong or came back stays; the rest fades.
 // The long memory keeps only the strongest few. Old promises turn into worries.
 export function consolidate(k, now = Date.now()) {
@@ -228,6 +240,8 @@ const MOMENT = {
 export function experience(k, d, ctx) {
   const now = ctx.now ?? Date.now();
   satisfy(k, d, ctx);
+  const mm = mindOf(k);
+  mm.habit = [...(mm.habit ?? []), d.action].slice(-HABIT_N);
   const p = ctx.placeName ?? ctx.place;
   const key = beliefKey(d.action, beliefPlace(d, ctx.place));
   const mood = d.mood ?? k.mood;

@@ -42,6 +42,9 @@ export default {
     // 'off' turns it off, and when Ollama is not running the koalas use their own bookshelf
     ollamaUrl: env.GROVE_OLLAMA_URL === 'off' ? '' : env.GROVE_OLLAMA_URL || 'http://127.0.0.1:11434',
     ollamaModel: env.GROVE_OLLAMA_MODEL || '',
+    // the koalas' own GitHub: a fine-grained token with Contents read/write on one repository
+    githubToken: env.GROVE_GITHUB_TOKEN || '',
+    githubRepo: env.GROVE_GITHUB_REPO || '',
     model: env.GROVE_MODEL || 'claude-haiku-5-5',
     bin: env.GROVE_BIN || env.CLAUDE_BIN || 'claude',
     callUsd: positiveNumber('GROVE_CALL_USD', env.GROVE_CALL_USD, 0.05, { max: 1 }),

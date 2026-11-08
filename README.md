@@ -87,7 +87,7 @@ things that need real words, while the instinct keeps deciding what they do:
 - **New library pages.** On instinct, a page a koala reads is written by the local model about its
   topic, building on what it already knows, so the 40-page shelf never runs out. If Ollama is not
   running, or the page repeats something it knows, the bookshelf answers instead.
-- **A nightly diary.** Once a day, when a koala settles down to sleep, it writes one memory of the
+- **A nightly diary.** Once a day, at its first nap after 20:00 (`diaryHour`), a koala writes one memory of the
   day worth keeping, and sometimes something new about who it is becoming (a trait). Without a
   local model it keeps the day's biggest moment as a memory.
 
@@ -130,6 +130,36 @@ the model brain sees in its prompt too:
 
 The koala's card on the page has an **Inside** section with its drives, principles, lessons and
 promises.
+
+### Their own GitHub
+
+Once a day, right after its diary, each koala commits its life to a GitHub repository of its
+own, as the author of the commit (`Ruby the koala`). Nobody tells it what to write:
+
+- `<koala>/README.md`: its profile, rewritten each day. Stage and wisdom, the traits it found
+  out about itself, what it holds to, the lessons it learned with their evidence, its wish,
+  its projects and what it remembers.
+- `<koala>/diary/<date>.md`: one page a day. The diary entry, how it felt, what it did (counted),
+  things it said and what it learned that day.
+- `<koala>/mind.json`: its whole inner life that day (drives, beliefs, long and short memory,
+  promises), so you can study how it changes over time with plain `git log`.
+- `<koala>/projects/<name>/README.md`: its projects. An invention of its own that the grove built,
+  or its notes on the topic it has learned most about, written in its own voice by the local
+  model when there is one.
+- `README.md`: an index of the koalas.
+
+To set it up (5 minutes):
+
+1. Make a GitHub account for the koalas (GitHub allows one free machine account per person, made
+   by you), or use your own.
+2. Create a repository for them, for example `koala-grove-life`, and tick **Add a README** (the
+   koalas need a first commit to build on).
+3. Create a fine-grained token: Settings > Developer settings > Fine-grained tokens. Repository
+   access: only that repository. Permissions: **Contents: Read and write**. Nothing else.
+4. Start the grove with `GROVE_GITHUB_REPO=owner/koala-grove-life GROVE_GITHUB_TOKEN=github_pat_...`
+   (or put them in the LaunchAgent). The token stays on the server and is never sent to the page.
+
+If a commit fails, the grove logs one line and tries again the next day.
 
 ### The public API (read-only)
 
@@ -402,6 +432,8 @@ All settings are environment variables.
 | `GROVE_HYBRID_EVERY` | `4` | In Hybrid, one routine decision in this many is a model call (being spoken to always is). |
 | `GROVE_LOCAL_READS_PER_DAY` | `48` | Pages read on instinct per day for the whole grove (1 to 1000). |
 | `GROVE_AUTOSTART` | `1` | `0` keeps a fresh grove paused on start, even on instinct. |
+| `GROVE_GITHUB_REPO` | (off) | `owner/name` of the koalas' own repository, where each commits its life once a day. |
+| `GROVE_GITHUB_TOKEN` | (off) | A fine-grained token with Contents read/write on that one repository only. |
 | `GROVE_PUBLIC_HOSTS` | (none) | Comma-separated host names (a tunnel) allowed to read the public `/api/v1`, and nothing else. |
 | `GROVE_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama for free new library pages and nightly diaries; `off` turns it off. |
 | `GROVE_OLLAMA_MODEL` | (auto) | Which installed Ollama model to use; empty picks one (gemma4, llama3.2, qwen2.5, ...). |
