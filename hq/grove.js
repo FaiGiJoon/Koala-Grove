@@ -393,6 +393,14 @@ export class Grove {
   }
 
   // --- the koalas' own GitHub ------------------------------------------------------------
+  // Every koala writes its page now (for trying it out), instead of waiting for the evening.
+  async publishNow() {
+    if (!this.github) throw new GroveError(409, 'the koalas have no GitHub yet: run scripts/setup-github.sh');
+    for (const k of this.#thinkers()) this.#publish(k.id, strongestToday(this.world.koalas[k.id]));
+    await this.idle();
+    return { repo: this.github.url, koalas: this.#thinkers().map((k) => k.name) };
+  }
+
   #pub = Promise.resolve();
   #publish(id, entry) {
     if (!this.github) return;

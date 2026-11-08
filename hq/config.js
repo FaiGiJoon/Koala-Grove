@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +17,14 @@ export function positiveNumber(name, raw, fallback, { integer = false, max = Inf
   return n;
 }
 
+// Settings kept on this computer only (the koalas' GitHub token, say): data/grove.env,
+// written by scripts/setup-github.sh. data/ is never committed. Real env vars win.
+const ENV_FILE = new URL('../data/grove.env', import.meta.url);
+try {
+  if (fs.existsSync(ENV_FILE) && !process.env.GROVE_NO_ENV_FILE) process.loadEnvFile(ENV_FILE);
+} catch (err) {
+  console.error(`could not read data/grove.env: ${err.message}`);
+}
 const env = process.env;
 
 // Which brain the koalas use: local (free instinct, 24/7), hybrid or claude.
