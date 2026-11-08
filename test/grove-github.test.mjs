@@ -89,3 +89,15 @@ test('each koala commits its life once a day: profile, diary, mind and a project
   assert.ok(!JSON.stringify(grove.state()).includes('SECRET123'), 'the token never reaches the page');
   grove.close();
 });
+
+test('publishNow: every koala writes its page right away; without GitHub it says how to set it up', async () => {
+  const f = fakeGithub();
+  const on = new Grove({ config: { brain: 'local' }, localLlm: null, github: createGithub({ token: 'github_pat_x', repo: 'koalas/life', fetchImpl: f.fetchImpl }) });
+  const out = await on.publishNow();
+  assert.deepEqual(out.koalas.sort(), ['Crystal', 'Ruby']);
+  assert.equal(f.commits.length, 2);
+  on.close();
+  const off = new Grove({ config: { brain: 'local' }, localLlm: null, github: null });
+  await assert.rejects(off.publishNow(), /setup-github\.sh/);
+  off.close();
+});

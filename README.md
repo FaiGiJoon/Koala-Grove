@@ -148,16 +148,17 @@ own, as the author of the commit (`Ruby the koala`). Nobody tells it what to wri
   model when there is one.
 - `README.md`: an index of the koalas.
 
-To set it up (5 minutes):
+To set it up, make the repository (tick **Add a README**), create a fine-grained token for it
+(only that repository, **Contents: Read and write**, nothing else), then run:
 
-1. Make a GitHub account for the koalas (GitHub allows one free machine account per person, made
-   by you), or use your own.
-2. Create a repository for them, for example `koala-grove-life`, and tick **Add a README** (the
-   koalas need a first commit to build on).
-3. Create a fine-grained token: Settings > Developer settings > Fine-grained tokens. Repository
-   access: only that repository. Permissions: **Contents: Read and write**. Nothing else.
-4. Start the grove with `GROVE_GITHUB_REPO=owner/koala-grove-life GROVE_GITHUB_TOKEN=github_pat_...`
-   (or put them in the LaunchAgent). The token stays on the server and is never sent to the page.
+```
+./scripts/setup-github.sh
+```
+
+It asks for the repository and the token (typed hidden), checks the token can write there,
+saves both in `data/grove.env` (readable only by you, never committed; the server reads it at
+start), restarts the grove and offers to let every koala write a first page right away. The
+token is never sent to the page.
 
 If a commit fails, the grove logs one line and tries again the next day.
 
