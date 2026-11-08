@@ -11,7 +11,7 @@ const grove = new Grove({
   config: { ...config.grove, workDir: path.join(config.workDir, 'grove') },
 });
 const google = new Google({ dataDir: config.dataDir });
-const server = createApp({ grove, publicDir: path.join(config.root, 'public'), google });
+const server = createApp({ grove, publicDir: path.join(config.root, 'public'), google, publicHosts: config.publicHosts });
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {

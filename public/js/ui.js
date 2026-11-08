@@ -229,13 +229,14 @@ export function createUI({ scene, api }) {
     <div class="thought"></div>
     <div class="said"></div>
     <div class="needs"></div>
+    <details class="inner"><summary>Inside</summary><div class="needs drives"></div><ul class="inner-notes"></ul></details>
     <div class="give" role="group" aria-label="Give an item"></div>
     <form class="talk">
       <input maxlength="140" placeholder="Say something to the koala" aria-label="Say something">
       <button class="btn" type="submit">Say</button>
       <button class="btn ghost pat" type="button">Pat</button>
     </form>
-    <div class="cost-note">Giving, saying and patting are free. The koala reacts on its next decision, and that is a real model call.</div>`;
+    <div class="cost-note">Giving, saying and patting are free. The koala reacts on its next decision (a real model call only on the Hybrid or Claude brain).</div>`;
   insp.querySelector('.close').addEventListener('click', () => select(null));
   const give = insp.querySelector('.give');
   for (const item of Object.keys(ITEM_ICON)) {
@@ -506,6 +507,19 @@ export function createUI({ scene, api }) {
     said.textContent = k.say ? `Last said: “${k.say}”` : '';
     said.hidden = !k.say;
     insp.querySelector('.needs').innerHTML = `<label>Hunger</label>${bar(k.hunger, 'var(--orange)')}<label>Energy</label>${bar(k.energy, 'var(--mint)')}<label>Strength</label>${bar(k.strength, 'var(--gold)')}`;
+    // the inner life: drives (0 met .. 1 pressing), what it holds to, lessons, promises
+    const inner = k.inner;
+    if (inner) {
+      const n = inner.needs;
+      insp.querySelector('.drives').innerHTML = ['curiosity', 'social', 'expression', 'quiet']
+        .map((d) => `<label>${d[0].toUpperCase()}${d.slice(1)}</label>${bar(Math.round(n[d] * 100), 'var(--blue, #7aa7ff)')}`).join('');
+      insp.querySelector('.inner-notes').innerHTML = [
+        `<li><b>Holds to</b> ${esc(inner.holdsTo.join(' '))}</li>`,
+        ...inner.beliefs.slice(0, 3).map((b) => `<li><b>Learned</b> ${esc(b.text)} <span class="ev">x${b.evidence}</span></li>`),
+        ...inner.promises.map((p) => `<li><b>Promised</b> to ${esc(p.subject)}</li>`),
+        ...inner.worries.map((w) => `<li><b>Worried</b> ${esc(w)}</li>`),
+      ].join('');
+    }
     const full = k.inventory.length >= (k.carry ?? 4);
     for (const b of give.children) b.disabled = full;
     give.title = full ? `${k.name}'s paws are full` : '';

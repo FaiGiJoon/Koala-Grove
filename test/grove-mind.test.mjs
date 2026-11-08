@@ -1,153 +1,151 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Grove } from '../hq/grove.js';
+import http from 'node:http';
 import {
-  newKoala, parseDecision, applyDecision, buildPrompt, systemPrompt, wisdomOf, relevantLearned, interestsOf,
-  DECISION_SCHEMA, MAX_TRAITS, MAX_LEARNED,
-} from '../hq/grove-world.js';
+  mindOf, needsOf, driftMind, satisfy, notice, recall, learn, beliefBoost, consolidate, experience, onBuilt, promise, publicMind, holdsTo,
+} from '../hq/grove-mind.js';
+import { newKoala, applyDecision, parseDecision, placesOf, drift, groveClock, friendOf } from '../hq/grove-world.js';
+import { instinctDecide } from '../hq/grove-instinct.js';
+import { Grove } from '../hq/grove.js';
+import { createApp } from '../hq/http.js';
 
-const USAGE = { cost_usd: 0.002, tokens_in: 1500, tokens_out: 80, duration_ms: 900 };
-const BRIDGE = { id: 1, kind: 'bridge_library_isle', title: 'Bridge', plot: null, progress: 4, effort: 4, done: true, by: 'crystal', helpers: ['crystal'] };
+const T = Date.UTC(2026, 10, 8, 10);
 
-function world() {
-  return { koalas: { crystal: newKoala('crystal'), ruby: newKoala('ruby') }, builds: [BRIDGE], stock: {}, minute: 0 };
-}
+test('a mind starts from what the koala already remembers', () => {
+  const k = { ...newKoala('ruby'), memories: ['The day the bridge was built.'] };
+  assert.equal(mindOf(k).long[0].text, 'The day the bridge was built.');
+});
 
-// A grove where Crystal researches (or reads) once, and the library answers with `answer`.
-function libraryGrove({ action = 'research', answer, config = {} }) {
-  let t = Date.UTC(2026, 9, 31, 12);
-  const calls = [];
-  const brain = async (req) => {
-    calls.push(req);
-    if (req.kind === 'research' || req.kind === 'read') return { ok: true, raw: answer, usage: USAGE };
-    return { ok: true, raw: req.koala === 'crystal' ? { action, target: 'How do stars shine?' } : { action: 'sit' }, usage: USAGE };
-  };
-  const grove = new Grove({ config: { dayUsd: 5, ...config }, think: brain, now: () => t, rng: () => 0.5 });
-  grove.world.builds = [BRIDGE];
-  grove.world.koalas.crystal.place = 'library_isle';
-  const step = async (ms = 5000) => { t += ms; grove.heartbeat(); grove.tick(); await grove.idle(); };
-  return { grove, calls, step };
-}
+test('drives build up over time, at each koala\'s own pace, and actions meet them', () => {
+  const c = newKoala('crystal');
+  const r = newKoala('ruby');
+  driftMind(c, 30);
+  driftMind(r, 30);
+  assert.ok(needsOf(c).curiosity > needsOf(r).curiosity, 'Crystal gets curious faster');
+  assert.ok(needsOf(r).quiet > needsOf(c).quiet, 'Ruby needs quiet sooner');
+  const before = needsOf(c).curiosity;
+  satisfy(c, { action: 'read' });
+  assert.ok(needsOf(c).curiosity < before);
+  c.energy = 10;
+  assert.equal(needsOf(c).rest, 0.9);
+});
 
-test('wisdom levels: a new koala is a curious baby and grows wiser with what it learns', () => {
+test('memory is small on purpose: only strong or recalled moments survive the night', () => {
   const k = newKoala('crystal');
-  assert.equal(k.wisdom, 0);
-  assert.deepEqual(k.traits, []);
-  assert.deepEqual(k.curiosities, []);
-  assert.equal(wisdomOf(k).wisdomLabel, 'Curious baby');
-  assert.equal(wisdomOf({ wisdom: 5 }).wisdomLabel, 'Little learner');
-  assert.equal(wisdomOf({ wisdom: 70 }).wisdomLabel, 'Wise koala');
-  assert.equal(wisdomOf({ wisdom: 70 }).nextWisdom, null);
-  assert.equal(wisdomOf({}).wisdom, 0, 'old koalas without wisdom start at zero');
+  notice(k, 'Saw a frog once.', 'moment', T);
+  notice(k, 'Played at the Lily Pond.', 'moment', T);
+  notice(k, 'Played at the Lily Pond.', 'moment', T); // again: stronger, not doubled
+  notice(k, 'The big storm.', 'moment', T, 3);
+  assert.equal(mindOf(k).short.length, 3);
+  consolidate(k, T);
+  assert.deepEqual(k.memories.sort(), ['Played at the Lily Pond.', 'The big storm.']);
+  for (let i = 0; i < 30; i++) notice(k, `Moment ${i}`, 'moment', T + i, 3);
+  consolidate(k, T + 100);
+  assert.equal(k.memories.length, 12);
+  assert.equal(mindOf(k).short.length, 0);
 });
 
-test('traits: a decision can add one, duplicates are ignored, and the list is capped', () => {
-  assert.ok(DECISION_SCHEMA.required.includes('trait'));
-  const w = world();
-  const k = w.koalas.crystal;
-  applyDecision(w, 'crystal', parseDecision({ action: 'sit', trait: 'I love the night sky' }, k));
-  applyDecision(w, 'crystal', parseDecision({ action: 'sit', trait: 'i love the night sky' }, k));
-  assert.deepEqual(k.traits, ['I love the night sky']);
-  for (let i = 0; i < MAX_TRAITS + 2; i++) applyDecision(w, 'crystal', parseDecision({ action: 'sit', trait: `trait ${i}` }, k));
-  assert.equal(k.traits.length, MAX_TRAITS);
-  assert.equal(k.traits.at(-1), `trait ${MAX_TRAITS + 1}`);
+test('recall strengthens memories about where the koala is', () => {
+  const k = newKoala('ruby');
+  notice(k, 'Read at the Library Isle.', 'moment', T, 2);
+  assert.equal(recall(k, ['Library Isle']), 1);
+  assert.equal(mindOf(k).short[0].recalled, 0.25);
 });
 
-test('old koalas without traits still take one', () => {
-  const w = world();
-  delete w.koalas.ruby.traits;
-  applyDecision(w, 'ruby', parseDecision({ action: 'sit', trait: 'Quiet but brave' }, w.koalas.ruby));
-  assert.deepEqual(w.koalas.ruby.traits, ['Quiet but brave']);
+test('beliefs carry evidence, grow with good experiences and fade with bad ones', () => {
+  const k = newKoala('crystal');
+  for (let i = 0; i < 3; i++) learn(k, 'play@pond', 'Playing at the pond makes me happy.');
+  assert.equal(beliefBoost(k, { action: 'play', target: 'pond' }, 'stockpile'), 3);
+  for (let i = 0; i < 3; i++) learn(k, 'play@pond', 'x', -1);
+  assert.equal(beliefBoost(k, { action: 'play', target: 'pond' }, 'stockpile'), 0);
+  assert.equal(mindOf(k).beliefs.length, 0, 'a belief with no evidence left is dropped');
 });
 
-test('the prompt tells a koala its mind: level, traits, curiosities and what it knows', () => {
-  const w = world();
-  const k = w.koalas.crystal;
-  k.wisdom = 16;
-  k.traits = ['bold', 'loves puzzles'];
-  k.curiosities = ['black holes'];
-  k.learned = ['Stars are giant balls of hot gas.'];
-  const p = buildPrompt(w, 'crystal', { label: 'Day 1', phase: 'day' });
-  assert.match(p, /you are a young scholar \(wisdom 16; a clever koala at 35\)\. You know 1 thing\./);
-  assert.match(p, /Who you are becoming: bold; loves puzzles\./);
-  assert.match(p, /Lately you wonder about: black holes\./);
-  assert.match(p, /Things you learned:\n- Stars are giant balls of hot gas\./);
-  assert.match(systemPrompt('crystal', w), /research it on the web: ask a follow-up question that goes deeper/);
-  assert.match(systemPrompt('crystal', w), /name it as a trait/);
+test('experience: a promise made by starting a build is kept when it is finished', () => {
+  const world = { koalas: { crystal: newKoala('crystal'), ruby: newKoala('ruby') }, builds: [], stock: { wood: 10, stone: 4 } };
+  const c = world.koalas.crystal;
+  const d = { action: 'build', target: 'bench', mood: 'happy', say: '', thought: '', remember: '', bond: 0 };
+  const logs = applyDecision(world, 'crystal', parseDecision(d, c, placesOf(world)));
+  experience(c, d, { place: c.place, placeName: 'plot', friend: 'Ruby', logs, now: T });
+  assert.equal(mindOf(c).promises.length, 1);
+  const kept = onBuilt([c, world.koalas.ruby], `Crystal finished the ${world.builds[0].title}!`, T);
+  assert.equal(kept.length, 1);
+  assert.ok(mindOf(c).short.some((m) => m.text.startsWith('I kept my promise')));
+  assert.ok(mindOf(c).beliefs.some((b) => b.key === 'promises'));
 });
 
-test('curiosities widen the interests without repeating the built-in ones', () => {
-  const k = { ...newKoala('crystal'), curiosities: ['stars', 'volcanoes'] };
-  const all = interestsOf(k);
-  assert.equal(all.filter((x) => x === 'stars').length, 1);
-  assert.ok(all.includes('volcanoes'));
+test('promises left too long turn into a worry', () => {
+  const k = newKoala('ruby');
+  promise(k, 'finish the Moon Bench', 'build', T);
+  consolidate(k, T + 4 * 24 * 3600000);
+  assert.equal(mindOf(k).promises.length, 0);
+  assert.match(mindOf(k).worries[0], /Moon Bench/);
 });
 
-test('relevantLearned: the newest facts plus older ones that touch the wish or interests', () => {
-  const k = {
-    ...newKoala('crystal'),
-    wish: 'build a telescope',
-    learned: ['A telescope makes faraway things look close.', 'Frogs drink through their skin.', 'Moss grows in shade.',
-      'Bees dance to talk.', 'Owls turn their heads far.', 'Rain comes from clouds.', 'Snails have teeth.', 'Ants are strong.'],
-  };
-  const got = relevantLearned(k, 6);
-  assert.equal(got.length, 6);
-  assert.equal(got[0], 'A telescope makes faraway things look close.', 'the old telescope fact is kept for the wish');
-  assert.deepEqual(got.slice(-3), ['Rain comes from clouds.', 'Snails have teeth.', 'Ants are strong.']);
+test('over a long life, the two koalas grow different: their own beliefs and habits', () => {
+  const world = { koalas: { crystal: newKoala('crystal'), ruby: newKoala('ruby') }, builds: [], stock: { wood: 4 } };
+  let s = 5;
+  const rng = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  const counts = { crystal: {}, ruby: {} };
+  for (let i = 0; i < 600; i++) {
+    for (const id of ['crystal', 'ruby']) {
+      const k = world.koalas[id];
+      const d = parseDecision(instinctDecide(world, id, groveClock(i * 30000), rng), k, placesOf(world));
+      const logs = applyDecision(world, id, d);
+      const f = friendOf(world, id);
+      experience(k, d, { place: k.place, placeName: placesOf(world)[k.place]?.name, friend: f.name, together: f.place === k.place, logs, now: T + i * 30000 });
+      for (const e of logs) if (e.kind === 'built') onBuilt(Object.values(world.koalas), e.text, T);
+      counts[id][d.action] = (counts[id][d.action] ?? 0) + 1;
+      for (const x of Object.values(world.koalas)) { drift(x, 0.5); driftMind(x, 0.5); }
+    }
+    if (i % 120 === 119) for (const x of Object.values(world.koalas)) consolidate(x, T + i * 30000);
+  }
+  const c = mindOf(world.koalas.crystal);
+  const r = mindOf(world.koalas.ruby);
+  assert.ok(c.beliefs.length >= 3 && r.beliefs.length >= 3, 'both learned lessons');
+  assert.notDeepEqual(c.beliefs.map((b) => b.key), r.beliefs.map((b) => b.key), 'different lessons');
+  assert.ok((counts.ruby.read ?? 0) > (counts.crystal.read ?? 0), 'Ruby reads more');
+  assert.ok((counts.crystal.play ?? 0) > (counts.ruby.play ?? 0), 'Crystal plays more');
+  assert.ok(world.koalas.crystal.memories.length > 0, 'memories were kept');
+  assert.deepEqual(holdsTo(world.koalas.ruby).length, 3);
 });
 
-test('research: the library hears the koala level, personality and what it knows, and answers deeper', async () => {
-  const { grove, calls, step } = libraryGrove({ answer: { fact: 'Stars shine by fusing hydrogen into helium.', idea: '', curiosity: 'the sun' } });
-  const c = grove.world.koalas.crystal;
-  c.traits = ['bold'];
-  c.learned = ['Stars are very far away.'];
+test('the public API: now, mind, memories, who and feed, read-only, open to any origin', async () => {
+  let t = T;
+  const grove = new Grove({ config: { brain: 'local' }, now: () => t, think: async () => { throw new Error('no'); } });
   grove.play();
-  await step();
-  const r = calls.find((x) => x.kind === 'research');
-  assert.ok(r, 'a research call was made');
-  assert.match(r.prompt, /Crystal is a curious baby koala/);
-  assert.match(r.prompt, /Crystal's personality: bold\./);
-  assert.match(r.prompt, /already knows:\n- Stars are very far away\./);
-  assert.match(r.prompt, /Answer very simply/);
-  assert.match(r.prompt, /one related topic the koala could wonder about next/);
-});
-
-test('research grows wisdom by 2, adds a curiosity, and keeps many facts', async () => {
-  const { grove, step } = libraryGrove({ answer: { fact: 'Stars shine by fusing hydrogen.', idea: '', curiosity: 'the sun' } });
-  const c = grove.world.koalas.crystal;
-  c.learned = Array.from({ length: 20 }, (_, i) => `fact ${i}`);
-  grove.play();
-  await step();
-  const k = grove.state().koalas.find((x) => x.id === 'crystal');
-  assert.equal(k.wisdom, 2);
-  assert.deepEqual(k.curiosities, ['the sun']);
-  assert.equal(k.learned.length, 21, 'more than the old 8 are kept');
-  assert.ok(k.recent.some((r) => /Now you wonder about the sun\./.test(r)));
-  assert.equal(k.wisdomLabel, 'Curious baby');
-  assert.ok(MAX_LEARNED >= 50);
-});
-
-test('crossing a wisdom level is told to the koala and logged', async () => {
-  const { grove, step } = libraryGrove({ answer: { fact: 'Stars shine.', idea: '', curiosity: '' } });
-  grove.world.koalas.crystal.wisdom = 4;
-  grove.play();
-  await step();
-  const k = grove.state().koalas.find((x) => x.id === 'crystal');
-  assert.equal(k.wisdomLabel, 'Little learner');
-  assert.ok(k.recent.some((r) => /You feel wiser\. You are a little learner now!/.test(r)));
-  assert.ok(grove.state().log.some((l) => l.kind === 'grow' && /grew wiser/.test(l.text)));
-});
-
-test('reading grows wisdom by 1', async () => {
-  const { grove, step } = libraryGrove({ action: 'read', answer: { fact: 'Stars twinkle because of air.', idea: '', curiosity: '' } });
-  grove.play();
-  await step();
-  assert.equal(grove.state().koalas.find((x) => x.id === 'crystal').wisdom, 1);
-});
-
-test('research now happens 16 times a day by default', async () => {
-  const { grove, calls, step } = libraryGrove({ answer: { fact: 'x', idea: '', curiosity: '' } });
-  grove.play();
-  for (let i = 0; i < 40; i++) await step(70000);
-  assert.equal(calls.filter((c) => c.kind === 'research').length, 16);
+  for (let i = 0; i < 60; i++) { t += 10000; grove.tick(); await grove.idle(); }
+  const server = createApp({ grove, publicDir: new URL('../public', import.meta.url).pathname });
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  const { port } = server.address();
+  const get = (p, headers = {}) => new Promise((ok, no) => {
+    http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}`, ...headers } }, (res) => {
+      let b = '';
+      res.on('data', (c) => (b += c)).on('end', () => ok({ status: res.statusCode, headers: res.headers, body: b ? JSON.parse(b) : null }));
+    }).on('error', no);
+  });
+  try {
+    const now = await get('/api/v1/now', { origin: 'https://faigijoon.github.io' });
+    assert.equal(now.status, 200);
+    assert.equal(now.headers['access-control-allow-origin'], '*');
+    assert.equal(now.body.v, 1);
+    assert.equal(now.body.koalas.length, 2);
+    assert.ok('curiosity' in now.body.koalas[0].needs);
+    const mind = await get('/api/v1/mind?koala=ruby');
+    assert.equal(mind.body.koalas[0].name, 'Ruby');
+    assert.ok(mind.body.koalas[0].holdsTo.includes('Rest is never wasted.'));
+    const mem = await get('/api/v1/memories?koala=crystal');
+    assert.ok(Array.isArray(mem.body.koalas[0].long));
+    const who = await get('/api/v1/who');
+    assert.ok(who.body.koalas.every((k) => k.holdsTo.length));
+    const feed = await get('/api/v1/feed?limit=5');
+    assert.ok(feed.body.feed.length <= 5 && feed.body.feed.length > 0);
+    assert.equal((await get('/api/v1/mind?koala=nobody')).status, 404);
+    assert.equal((await get('/api/v1/nope')).status, 404);
+    assert.equal((await get('/api/grove', { origin: 'https://evil.example' })).status, 403, 'the private API stays private');
+    assert.equal((await get('/api/v1/now', { host: 'grove.example.ts.net' })).status, 403, 'unknown hosts are refused');
+  } finally {
+    server.close();
+    grove.close();
+  }
 });

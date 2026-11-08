@@ -379,3 +379,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .dfeed li.error .x { color: var(--red); }
 .dfeed li.learn .x, .dfeed li.grow .x { color: var(--gold); }
 @media (prefers-reduced-motion: reduce) { #dash { backdrop-filter: none; } }
+
+/* the koala's inner life, in the inspector */
+#inspector .inner { margin-top: var(--s-3); font: var(--fs-xs) var(--mono); color: var(--muted); }
+#inspector .inner summary { cursor: pointer; color: var(--text, #e8eef5); }
+#inspector .inner .drives { margin-top: var(--s-2); }
+#inspector .inner-notes { list-style: none; padding: 0; margin: var(--s-2) 0 0; display: grid; gap: 4px; }
+#inspector .inner-notes b { color: var(--text, #e8eef5); font-weight: 600; margin-right: 4px; }
+#inspector .inner-notes .ev { opacity: 0.6; }

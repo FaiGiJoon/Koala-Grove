@@ -104,6 +104,51 @@ still stops it. With `scripts/install-autostart.sh` the server starts at login a
 if it crashes, so the koalas keep living whether or not you are watching; open the page any
 time to see what they got up to.
 
+## Their inner life
+
+Each koala has a mind of its own (`hq/grove-mind.js`) that the instinct chooses with, and that
+the model brain sees in its prompt too:
+
+- **Five drives**, each 0 (met) to 1 (pressing): rest, curiosity, social, expression and quiet.
+  They build up at each koala's own pace (Crystal gets curious fast, Ruby needs quiet sooner)
+  and are met by what it does: reading meets curiosity, being together meets social, playing and
+  building meet expression, a nap or sitting alone meets quiet. The most pressing ones pull it
+  toward what meets them.
+- **Memory that is small on purpose.** Moments go into a short memory. Seen again, a moment gets
+  stronger instead of doubled, and being at a place brings back memories about it. Each night,
+  in its diary, sleep sorts the day: what was strong or came back moves to the long memory (12
+  at most, the strongest), the rest fades, and every long memory fades a little too.
+- **Beliefs from experience**, each with its evidence: "Playing at the Lily Pond makes me happy
+  (x12)". A good experience adds evidence, a bad one takes some away, and a belief with none left
+  is dropped. More evidence means the koala does it more, so over time the two grow different
+  habits (in a long run Crystal learns to love playing, Ruby the library).
+- **Promises.** Starting a build is a promise to finish it. When it is finished, everyone who
+  promised keeps it, remembers that, and learns that keeping a promise feels good. A promise not
+  kept in three days is let go, and becomes a worry that nags it back to building.
+- **What it holds to.** Three principles each (Crystal: "Be brave, and still be home before
+  dark." Ruby: "Rest is never wasted.") that nudge what it picks.
+
+The koala's card on the page has an **Inside** section with its drives, principles, lessons and
+promises.
+
+### The public API (read-only)
+
+The koalas' lives are open to read, like a creature living on the internet: no key, plain GET,
+JSON, open to any website (CORS). Version 1 only ever adds fields.
+
+| Endpoint | What |
+| --- | --- |
+| `/api/v1/now` | What each koala is doing, thinking and saying, its feeling (mood and energy, -1 to 1) and drives. |
+| `/api/v1/mind` | The loudest needs, wants and promises, worries, what it wonders about, what it holds to. |
+| `/api/v1/memories` | Beliefs with evidence, the long and short memory (strength, recalled, since), what it learned lately. |
+| `/api/v1/who` | Who each koala is: stage, wisdom, traits, interests, principles, friend and bond. |
+| `/api/v1/feed?limit=20` | The latest things that happened in the grove (1 to 50). |
+
+Add `?koala=crystal` for one koala. The server only listens on 127.0.0.1. To let your website
+read it, put a tunnel in front (for example `tailscale funnel 4317`) and allow that host name
+with `GROVE_PUBLIC_HOSTS=your-mac.your-tailnet.ts.net`: the tunnel then reaches `/api/v1` and
+nothing else.
+
 ## The koalas
 
 - **Crystal** is a bold and curious baby koala, a girl in a pink scarf, who collects shiny pebbles
@@ -357,6 +402,7 @@ All settings are environment variables.
 | `GROVE_HYBRID_EVERY` | `4` | In Hybrid, one routine decision in this many is a model call (being spoken to always is). |
 | `GROVE_LOCAL_READS_PER_DAY` | `48` | Pages read on instinct per day for the whole grove (1 to 1000). |
 | `GROVE_AUTOSTART` | `1` | `0` keeps a fresh grove paused on start, even on instinct. |
+| `GROVE_PUBLIC_HOSTS` | (none) | Comma-separated host names (a tunnel) allowed to read the public `/api/v1`, and nothing else. |
 | `GROVE_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama for free new library pages and nightly diaries; `off` turns it off. |
 | `GROVE_OLLAMA_MODEL` | (auto) | Which installed Ollama model to use; empty picks one (gemma4, llama3.2, qwen2.5, ...). |
 | `GROVE_MODEL` | `claude-haiku-5-5` | Model for the koalas' decisions. |

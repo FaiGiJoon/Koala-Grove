@@ -28,6 +28,8 @@ export function brainMode(raw) {
 
 export default {
   port: positiveNumber('PORT', env.PORT, 4317, { integer: true, max: 65535 }),
+  // Host names (e.g. a Tailscale Funnel or Cloudflare tunnel) that may read the public /api/v1
+  publicHosts: (env.GROVE_PUBLIC_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean),
   // Two koalas on real model calls; GROVE_DAY_USD caps today's real spend.
   grove: {
     brain: brainMode(env.GROVE_BRAIN),

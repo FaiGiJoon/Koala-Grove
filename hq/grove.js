@@ -15,6 +15,7 @@ import {
 import { koalaArgs, researchArgs, readArgs, think as callClaude } from './grove-brain.js';
 import { instinctDecide, instinctRead } from './grove-instinct.js';
 import { createLocalLlm } from './grove-local-llm.js';
+import { driftMind, experience, onBuilt, notice, consolidate, publicMind } from './grove-mind.js';
 import { RESOURCES, ISLANDS, COSTS, START_STOCK, held, bridged, stockOf } from './grove-economy.js';
 import { BABY_NAMES, babyPersona, bornBaby, graduates } from './grove-family.js';
 import { designCost } from './grove-design.js';
@@ -301,6 +302,7 @@ export class Grove {
       const minutes = Math.min(2, (now - this.#lastDrift) / 60000);
       for (const k of this.#all()) {
         drift(this.world.koalas[k.id], minutes);
+        driftMind(this.world.koalas[k.id], minutes);
         if (k.follows) k.strength = Math.min(100, k.strength + minutes); // babies grow by being looked after
         this.#save(k.id);
       }
@@ -364,11 +366,13 @@ export class Grove {
     }
     if (!entry) {
       const big = [...(k.recent ?? [])].reverse().find((e) => /finished the|rose from the water|was born|gave you|you read|found out|grew wiser/i.test(e));
-      if (!big) return;
-      entry = { memory: big.replace(/^You /, 'I ').slice(0, 140), trait: '' };
+      entry = big ? { memory: big.replace(/^You /, 'I ').slice(0, 140), trait: '' } : { memory: '', trait: '' };
     }
     const memory = entry.memory.replace(/\s+/g, ' ').slice(0, 140);
-    if (!(k.memories ?? []).includes(memory)) k.memories = [...(k.memories ?? []), memory].slice(-12);
+    // the diary entry is a strong memory; then sleep sorts the day: what mattered stays
+    if (memory) notice(k, memory, 'moment', this.now(), 3);
+    consolidate(k, this.now());
+    if (!memory) { this.#save(id); return; }
     const trait = entry.trait.replace(/\s+/g, ' ').slice(0, 120);
     if (trait && !(k.traits ?? []).some((t) => t.toLowerCase() === trait.toLowerCase())) {
       k.traits = [...(k.traits ?? []), trait].slice(-MAX_TRAITS);
@@ -724,7 +728,19 @@ export class Grove {
       if (!topic) decision.action = 'sit';
     }
     this.world.minute = this.#minute();
-    for (const entry of applyDecision(this.world, id, decision)) this.#log(entry);
+    const logs = applyDecision(this.world, id, decision);
+    for (const entry of logs) this.#log(entry);
+    // the inner life: drives, the moment noticed, lessons learned, promises made and kept
+    {
+      const k = this.world.koalas[id];
+      const f = friendOf(this.world, id);
+      const places = placesOf(this.world);
+      experience(k, decision, {
+        place: k.place, placeName: places[k.place]?.name ?? k.place, friend: f?.name, together: f?.place === k.place,
+        said: !!decision.say, explored: decision.action === 'move', logs, now: this.now(),
+      });
+      for (const e of logs) if (e.kind === 'built') onBuilt(this.#all().map((x) => this.world.koalas[x.id]), e.text, this.now());
+    }
     this.#setMeta('baby', this.world.baby ?? null);
     this.#setMeta('nest', this.world.nest ?? null);
     // babies go wherever the parent they follow goes
@@ -906,6 +922,51 @@ export class Grove {
     return exportTabs({ koalas: st.koalas, log: this.q.allLog.all(), usage: this.q.allUsage.all(), now: this.now(), model: this.config.model });
   }
 
+  // The read-only public API (/api/v1): the koalas' lives, open to anyone curious.
+  // Version 1 only ever adds fields. koala: one id, or every koala when empty.
+  publicApi(endpoint, { koala = '', limit = 20 } = {}) {
+    const now = this.now();
+    const at = new Date(now).toISOString();
+    const all = this.#all();
+    const pick = koala ? all.filter((k) => k.id === koala) : all;
+    if (koala && !pick.length) throw new GroveError(404, `no koala called ${koala}`);
+    const clock = this.clock();
+    const world = { name: 'Koala Grove', day: clock.day, time: `${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`, phase: clock.phase };
+    const VALENCE = { happy: 0.8, playful: 0.7, excited: 0.8, proud: 0.7, cozy: 0.6, content: 0.4, calm: 0.4, curious: 0.5, sleepy: -0.1, hungry: -0.3, bored: -0.3, lonely: -0.5, sad: -0.6, grumpy: -0.6, scared: -0.7 };
+    const one = (k) => {
+      const m = publicMind(this.world.koalas[k.id], now);
+      const f = friendOf(this.world, k.id);
+      switch (endpoint) {
+        case 'now': return {
+          name: k.name, asleep: k.activity === 'nap', doing: k.activity, at_place: placesOf(this.world)[k.place]?.name ?? k.place,
+          thought: k.thought ?? '', said: k.say ?? '',
+          feeling: { mood: VALENCE[k.mood] ?? 0, energy: Math.round(((k.energy ?? 50) / 50 - 1) * 100) / 100, words: k.mood },
+          needs: m.needs, hunger: Math.round(k.hunger ?? 0) / 100,
+        };
+        case 'mind': return {
+          name: k.name, thought: k.thought ?? '', busy: k.activity,
+          loudest: [{ kind: 'need', subject: m.loudest }, ...(k.wish ? [{ kind: 'want', subject: k.wish }] : []), ...m.promises.map((p) => ({ kind: 'promise', subject: p.subject }))].slice(0, 4),
+          open: { want: k.wish ? 1 : 0, promise: m.promises.length, worry: m.worries.length, question: (k.curiosities ?? []).length, person: f ? 1 : 0 },
+          promises: m.promises, worries: m.worries, wonders: k.curiosities ?? [], holdsTo: m.holdsTo,
+        };
+        case 'memories': return { name: k.name, beliefs: m.beliefs, long: m.long, short: m.short, learned: (k.learned ?? []).slice(-10) };
+        case 'who': return {
+          id: k.id, name: k.name, ...(({ stageLabel, wisdomLabel }) => ({ stage: stageLabel, wisdom: wisdomLabel }))({ ...growthOf(k), ...wisdomOf(k) }),
+          traits: k.traits ?? [], interests: interestsOf(k), holdsTo: m.holdsTo, friend: f?.name ?? null, bond: k.bond ?? 0, opinion: k.opinion ?? '',
+        };
+        default: return null;
+      }
+    };
+    if (endpoint === 'feed') {
+      const n = Math.max(1, Math.min(50, Number(limit) || 20));
+      const rows = this.q.recentLog.all(200).filter((e) => e.kind !== 'error' && e.kind !== 'system' && (!koala || e.koala === koala)).slice(0, n);
+      return { v: 1, at, world,
+        feed: rows.map((e) => ({ at: new Date(e.ts).toISOString(), koala: e.koala, kind: e.kind, text: e.text, ...(e.action ? { action: e.action } : {}) })) };
+    }
+    if (!['now', 'mind', 'memories', 'who'].includes(endpoint)) throw new GroveError(404, 'unknown endpoint');
+    return { v: 1, at, world, koalas: pick.map(one) };
+  }
+
   state() {
     const now = this.now();
     const today = this.#sums(startOfDay(now));
@@ -931,8 +992,9 @@ export class Grove {
       costs: COSTS,
       customCosts: Object.fromEntries(['small', 'medium', 'big'].map((size) => [size, designCost({ size, design: '' })])),
       islands: ISLANDS.map((i) => ({ ...i, bridged: bridged(this.world).has(i.id) })),
-      koalas: this.#all().map((k) => ({
+      koalas: this.#all().map(({ mind, ...k }) => ({
         ...k,
+        inner: (({ long, short, at, ...rest }) => ({ ...rest, beliefs: rest.beliefs.slice(0, 5), remembering: short.length }))(publicMind(this.world.koalas[k.id], now)),
         ...growthOf(k),
         ...wisdomOf(k),
         color: KOALAS.find((f) => f.id === k.id)?.color ?? k.color ?? '#a8a29a',
