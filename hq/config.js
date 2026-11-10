@@ -35,12 +35,23 @@ export function brainMode(raw) {
   return v;
 }
 
+// Which koalas live in the grove: comma-separated ids (crystal, ruby). Default: both.
+// GROVE_KOALAS=ruby runs a solo grove: Ruby alone, from day one.
+export function castOf(raw) {
+  if (raw === undefined || raw === '') return ['crystal', 'ruby'];
+  const ids = String(raw).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const bad = ids.filter((id) => !['crystal', 'ruby'].includes(id));
+  if (bad.length || !ids.length) throw new Error(`GROVE_KOALAS must list crystal and/or ruby, got: ${raw}`);
+  return [...new Set(ids)];
+}
+
 export default {
   port: positiveNumber('PORT', env.PORT, 4317, { integer: true, max: 65535 }),
   // Host names (e.g. a Tailscale Funnel or Cloudflare tunnel) that may read the public /api/v1
   publicHosts: (env.GROVE_PUBLIC_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean),
   // Two koalas on real model calls; GROVE_DAY_USD caps today's real spend.
   grove: {
+    cast: castOf(env.GROVE_KOALAS),
     brain: brainMode(env.GROVE_BRAIN),
     // in hybrid, a routine decision is a model call once in this many (being spoken to always is)
     hybridEvery: positiveNumber('GROVE_HYBRID_EVERY', env.GROVE_HYBRID_EVERY, 4, { integer: true, max: 100 }),
@@ -51,6 +62,8 @@ export default {
     // 'off' turns it off, and when Ollama is not running the koalas use their own bookshelf
     ollamaUrl: env.GROVE_OLLAMA_URL === 'off' ? '' : env.GROVE_OLLAMA_URL || 'http://127.0.0.1:11434',
     ollamaModel: env.GROVE_OLLAMA_MODEL || '',
+    // koalas on the free brain look things up on Wikipedia; 'off' keeps them to their books
+    localWeb: env.GROVE_LOCAL_WEB !== 'off',
     // the koalas' own GitHub: a fine-grained token with Contents read/write on one repository
     githubToken: env.GROVE_GITHUB_TOKEN || '',
     githubRepo: env.GROVE_GITHUB_REPO || '',
@@ -60,7 +73,7 @@ export default {
     computerDir: path.join(root, 'work', 'computers'),
     computerImage: env.GROVE_COMPUTER_IMAGE || 'node:24-alpine',
     docker: env.GROVE_DOCKER || 'docker',
-    makesPerDay: positiveNumber('GROVE_MAKES_PER_DAY', env.GROVE_MAKES_PER_DAY, 1, { integer: true, max: 10 }),
+    makesPerDay: positiveNumber('GROVE_MAKES_PER_DAY', env.GROVE_MAKES_PER_DAY, 3, { integer: true, max: 10 }),
     makeUsd: positiveNumber('GROVE_MAKE_USD', env.GROVE_MAKE_USD, 0.25, { max: 2 }),
     makeModel: env.GROVE_MAKE_MODEL || '',
     model: env.GROVE_MODEL || 'claude-haiku-5-5',

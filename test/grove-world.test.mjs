@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   KOALAS, PLACES, ITEMS, ACTIONS, MOODS, DECISION_SCHEMA,
   newKoala, parseDecision, applyDecision, drift, groveClock, buildPrompt, systemPrompt,
-  growthOf, carryLimit, canReadAt, STAGES, START_STRENGTH,
+  growthOf, carryLimit, canReadAt, STAGES, START_STRENGTH, unansweredVisitorWords,
 } from '../hq/grove-world.js';
 
 const world = () => ({ koalas: Object.fromEntries(KOALAS.map((k) => [k.id, newKoala(k.id)])) });
@@ -152,6 +152,18 @@ test('the prompt carries needs, the friend, memories and the place ids', () => {
   // Memories are for what is new; otherwise every turn re-saves the same moment.
   assert.match(systemPrompt('ruby'), /Leave remember empty unless/);
   assert.match(buildPrompt(w, 'crystal', groveClock(0)), /Things you remember/);
+});
+
+test('system prompt tells a koala what it really can do, so it answers a visitor honestly', () => {
+  const none = systemPrompt('ruby');
+  assert.match(none, /answer it out loud/);
+  assert.match(none, /not on GitHub/);
+  assert.match(none, /only when the grove has tokens to spend/);
+  assert.doesNotMatch(none, /written down on the grove's GitHub/);
+  const full = systemPrompt('ruby', null, { github: true, web: true });
+  assert.match(full, /written down on the grove's GitHub, once a day/);
+  assert.doesNotMatch(full, /not on GitHub/);
+  assert.doesNotMatch(full, /only when the grove has tokens/);
 });
 
 test('Crystal is a girl and Ruby a boy, both told so in their prompts', () => {
@@ -369,4 +381,18 @@ test('wish is a required schema field, stored when non-empty, kept when empty, a
   applyDecision(w, 'crystal', parseDecision({ action: 'sit', wish: '' }, m));
   assert.equal(m.wish, 'Build a tower to touch the stars');
   assert.equal(parseDecision({ action: 'sit', wish: 'x'.repeat(300) }, m).wish.length, 120);
+});
+
+test('a visitor question is put in front of the koala until it answers', () => {
+  const w = world();
+  const k = w.koalas.ruby;
+  k.recent = ['You sat and looked around.'];
+  assert.equal(unansweredVisitorWords(k), null);
+  assert.doesNotMatch(buildPrompt(w, 'ruby', groveClock(0)), /IS WAITING/);
+  k.recent.push('The visitor said: "Ruby, have you used your GitHub yet?"');
+  assert.equal(unansweredVisitorWords(k), 'Ruby, have you used your GitHub yet?');
+  assert.match(buildPrompt(w, 'ruby', groveClock(0)), /IS WAITING\. They just said to you: "Ruby, have you used your GitHub yet\?"/);
+  k.recent.push('You said: "Not yet, Crystal. I do not know what GitHub is."');
+  assert.equal(unansweredVisitorWords(k), null);
+  assert.doesNotMatch(buildPrompt(w, 'ruby', groveClock(0)), /IS WAITING/);
 });

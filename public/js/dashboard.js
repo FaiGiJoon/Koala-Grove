@@ -147,6 +147,35 @@ export function createDashboard({ api }) {
     }).join('');
   }
 
+  // The overview: what the koala wants, how pressing each drive is, what it searched for, and its open tickets.
+  const DRIVE_LABEL = { rest: 'Rest', curiosity: 'Curiosity', social: 'Company', expression: 'Speaking up', quiet: 'Quiet time' };
+  function overviewBox() {
+    const o = data?.overview;
+    if (!o?.name) {
+      $('#dash-overview').innerHTML = '<h3>Overview</h3><div class="dline">No koala in the grove yet.</div>';
+      return;
+    }
+    const drives = o.drives.map((d) => `<div class="ddrive"><label>${esc(DRIVE_LABEL[d.name] ?? d.name)}</label>${bar(Math.round(d.value * 100), 'var(--mint)')}</div>`).join('');
+    const searches = o.searches.length
+      ? `<ul class="dlist">${o.searches.map((s) => {
+          const what = s.title
+            ? (s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title))
+            : '<i>nothing found</i>';
+          return `<li><span class="t">${time(s.ts)}</span> “${esc(s.query)}” <span class="k">${esc(s.via)}</span> ${what}</li>`;
+        }).join('')}</ul>`
+      : '<div class="dline">No searches yet.</div>';
+    const tickets = o.openTickets.length
+      ? `<ul class="dlist">${o.openTickets.map((t) => `<li class="warning">${esc(t.text)} <span class="k">waiting for your answer</span></li>`).join('')}</ul>`
+      : '<div class="dline">No open tickets.</div>';
+    $('#dash-overview').innerHTML = `<h3>Overview: ${esc(o.name)}</h3>
+      <div class="dwish">${o.wish ? `Wants: “${esc(o.wish)}”` : 'No wish yet.'}</div>
+      <div class="dgrid">
+        <div><h4>Drives</h4>${drives || '<div class="dline">None.</div>'}</div>
+        <div><h4>Searched online</h4>${searches}</div>
+        <div><h4>Open tickets</h4>${tickets}</div>
+      </div>`;
+  }
+
   function usageBox() {
     const u = state.usage;
     const l = data?.last24;
@@ -188,6 +217,7 @@ export function createDashboard({ api }) {
   function draw() {
     if (!state || !isOpen()) return;
     $('#dash-sub').textContent = `${state.playing ? 'Running' : 'Paused'} · ${state.clock?.label ?? ''} · updated ${time(Date.now())}`;
+    overviewBox();
     cards();
     usageBox();
     habitsBox();

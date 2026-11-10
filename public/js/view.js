@@ -55,6 +55,13 @@ export const bridgeEnds = (land, island = 24) => {
   };
 };
 
+// Where a visitor may stand: the main island, or new land and its bridges (heightAt says so).
+// A bridge starts inside the island's edge, so the island itself must count as ground too,
+// or the visitor could never step back off a bridge onto the island.
+export function walkable(p, heightAt, island = 24) {
+  return Math.hypot(p.x, p.z) <= island - 1 || heightAt(p.x, p.z) != null;
+}
+
 export function landRoute(from, to, lands, island = 24) {
   const on = (p) => lands.find((l) => Math.hypot(p.x - l.x, p.z - l.z) < l.r + 0.5) ?? null;
   const a = on(from);

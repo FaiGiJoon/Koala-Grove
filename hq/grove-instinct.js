@@ -46,7 +46,7 @@ const LINES = {
     build: ['Tap tap tap! It is getting big!', 'This is going to be amazing.', 'Hold that side, {f}!'],
     gather: ['Got one! I can carry lots.', 'Found some {x}!'],
     store: ['Into the Stockpile it goes!'],
-    finish: ['We did it! Look at it!'],
+    finish: ['I did it! Look at it!'],
     explore: ['What is over there?', 'I am going to see everything.'],
     give: ['This is for you, {f}. Do not lose it.'],
     read: ['A book about {x}! Let me see.'],
@@ -63,7 +63,7 @@ const LINES = {
     build: ['One more piece, and then another.', 'Steady now.', 'It is coming along nicely.'],
     gather: ['A bit of {x}. Enough for now.'],
     store: ['There. Safe in the Stockpile.'],
-    finish: ['We made something that will stay.'],
+    finish: ['I made something that will stay.'],
     explore: ['I will take a slow look around.'],
     give: ['I saved this for you, {f}.'],
     read: ['Let me read about {x}, quietly.'],
@@ -86,7 +86,7 @@ const OPINIONS = [
   [60, ['My best friend in the whole grove.', 'I feel safe when they are near.']],
   [20, ['A good friend.', 'I like having them around.']],
   [-20, ['A bit noisy, but kind.', 'Still getting to know them.']],
-  [-101, ['We do not get on very well yet.']],
+  [-101, ['I do not get on very well yet.']],
 ];
 const TRAITS = {
   crystal: ['I always want to see what is around the corner.', 'I like being the first one there.', 'Shiny things make me happy.'],
@@ -100,7 +100,7 @@ const INVENTIONS = {
 // One true thing per page, for reading without tokens. Tags match the topic a koala opens.
 export const BOOKS = [
   { tags: ['koala', 'koalas', 'eucalyptus', 'leaves', 'water'], fact: 'Koalas get most of the water they need from the eucalyptus leaves they eat.', curiosity: 'how plants hold water' },
-  { tags: ['koala', 'koalas', 'sleep', 'sleepy', 'nap'], fact: 'Koalas sleep or rest for about 18 to 22 hours a day, because gum leaves give them very little energy.', idea: 'We could build a cozy hut to nap in.' },
+  { tags: ['koala', 'koalas', 'sleep', 'sleepy', 'nap'], fact: 'Koalas sleep or rest for about 18 to 22 hours a day, because gum leaves give them very little energy.', idea: 'I could build a cozy hut to nap in.' },
   { tags: ['eucalyptus', 'plants', 'trees', 'gum'], fact: 'There are more than 700 kinds of eucalyptus, and most of them grow only in Australia.', curiosity: 'Australian forests' },
   { tags: ['eucalyptus', 'plants', 'smell', 'oil'], fact: 'Eucalyptus leaves smell strong because they are full of oils that keep many insects from eating them.' },
   { tags: ['plants', 'flowers', 'garden', 'sun'], fact: 'Plants make their own food from sunlight, water and air. This is called photosynthesis.', idea: 'A flower bed by the pond would get sun and water.', curiosity: 'photosynthesis' },
@@ -117,8 +117,8 @@ export const BOOKS = [
   { tags: ['crystals', 'stones', 'quartz', 'shiny'], fact: 'Quartz is one of the most common crystals on Earth. Sand is often made of tiny bits of it.', curiosity: 'sand' },
   { tags: ['stones', 'rocks', 'mountains', 'lookout'], fact: 'Some rocks form from melted rock that cooled down, like the stone of old volcanoes.', curiosity: 'volcanoes' },
   { tags: ['stones', 'shiny', 'diamonds', 'crystals'], fact: 'Diamonds are made of the same stuff as pencil lead, carbon, squeezed very hard deep underground.' },
-  { tags: ['sand', 'beach', 'glass'], fact: 'Glass is made by heating sand until it melts, then letting it cool.', idea: 'With enough sand we could make something with glass windows.' },
-  { tags: ['explorers', 'faraway', 'maps', 'places'], fact: 'Explorers draw maps so the next traveller knows the way. A good map has a key and shows north.', idea: 'We could put up a sign with a map of the islands.' },
+  { tags: ['sand', 'beach', 'glass'], fact: 'Glass is made by heating sand until it melts, then letting it cool.', idea: 'With enough sand I could make something with glass windows.' },
+  { tags: ['explorers', 'faraway', 'maps', 'places'], fact: 'Explorers draw maps so the next traveller knows the way. A good map has a key and shows north.', idea: 'I could put up a sign with a map of the islands.' },
   { tags: ['faraway', 'places', 'sea', 'islands'], fact: 'Some islands are the tops of huge underwater mountains that poke out of the sea.', curiosity: 'islands' },
   { tags: ['explorers', 'brave', 'compass'], fact: 'A compass needle points north because the Earth acts like a giant magnet.', curiosity: 'magnets' },
   { tags: ['poems', 'words', 'stories'], fact: 'A haiku is a short poem with three lines of five, seven and five sounds.', idea: 'A reading nook would be a quiet place to write poems.' },
@@ -251,10 +251,10 @@ export function instinctDecide(world, id, clock = { phase: 'day' }, rng = Math.r
   }
 
   // Family: two grown-ups in love make a nest.
-  const partner = KOALAS.find((x) => x.id !== id && KOALAS.some((y) => y.id === id))?.id;
+  const partner = KOALAS.find((x) => x.id !== id && world.koalas[x.id])?.id;
   if (partner && canNest(world, id, partner).ok) {
     const waiting = world.nest?.by === partner;
-    add(waiting ? 96 : 70, { action: 'nest', mood: 'cozy', thought: waiting ? `${fname} made a nest for us.` : 'I would love a little family.', say: 'Shall we make a cozy nest together?', bond: 2 });
+    add(waiting ? 96 : 70, { action: 'nest', mood: 'cozy', thought: waiting ? `${fname} made a nest for me.` : 'I would love a little family.', say: 'Shall I make a cozy nest with you?', bond: 2 });
   }
 
   // Reacting to what just happened.
@@ -275,11 +275,11 @@ export function instinctDecide(world, id, clock = { phase: 'day' }, rng = Math.r
     const project = projectOf(world, k);
     const goalHere = project?.need && (SOURCES[k.place] ?? []).includes(project.need);
     if (resHeld && (full || !goalHere)) add(full ? 66 : 50, { action: 'store', mood: 'content', thought: 'My paws are full of good things.', say: rng() < 0.3 ? say('store') : '' });
-    if (open.length) add((friendBuilding ? 64 : 52) * t.build, { action: 'build', target: '', mood: 'happy', thought: friendBuilding ? `${fname} is building. I will help.` : 'Our build is not finished yet.', say: rng() < 0.4 ? say('build') : '', bond: friendBuilding ? 1 : 0 });
+    if (open.length) add((friendBuilding ? 64 : 52) * t.build, { action: 'build', target: '', mood: 'happy', thought: friendBuilding ? `${fname} is building. I will help.` : 'My build is not finished yet.', say: rng() < 0.4 ? say('build') : '', bond: friendBuilding ? 1 : 0 });
     if (open.length < 2) {
       const idea = rng() < 0.15 ? invention(world, k, rng) : null;
-      if (idea) add(57 * t.build, { action: 'build', target: 'new', build_name: idea.name, build_design: idea.design, mood: 'curious', thought: 'I have a brand new idea.', say: 'I have an idea! Let us make something new.' });
-      else if (project?.start) add(56 * t.build, { action: 'build', target: project.start, build_name: '', mood: 'curious', thought: `We have enough to make a ${BLUEPRINTS[project.start].name}.`, say: `Let us build a ${BLUEPRINTS[project.start].name}!` });
+      if (idea) add(57 * t.build, { action: 'build', target: 'new', build_name: idea.name, build_design: idea.design, mood: 'curious', thought: 'I have a brand new idea.', say: 'I have an idea! Let me make something new.' });
+      else if (project?.start) add(56 * t.build, { action: 'build', target: project.start, build_name: '', mood: 'curious', thought: `I have enough to make a ${BLUEPRINTS[project.start].name}.`, say: `Let me build a ${BLUEPRINTS[project.start].name}!` });
     }
     if (project?.need && !full) {
       if (goalHere) add(58 * t.build, { action: 'gather', target: project.need, mood: 'content', thought: `The ${BLUEPRINTS[project.kind].name} needs ${project.need}.`, say: rng() < 0.3 ? say('gather', project.need) : '' });
@@ -301,7 +301,7 @@ export function instinctDecide(world, id, clock = { phase: 'day' }, rng = Math.r
   if (canRead && canReadAt(world, k.place) && k.energy > 20) add(32 * t.read, { action: 'read', target: topic, mood: 'curious', thought: `I want to know about ${topic}.`, say: rng() < 0.4 ? say('read', topic) : '' });
   else if (canRead && places.library_isle && k.energy > 40) add(18 * t.read, { action: 'move', target: 'library_isle', mood: 'curious', thought: 'The library has so many books.', say: '' });
   const roam = Object.keys(places).filter((p) => p !== k.place && !places[p].build);
-  if (roam.length && k.energy > 30) add(14 * t.explore, { action: 'move', target: pick(roam, rng), mood: 'curious', thought: 'Let us see what is over there.', say: rng() < 0.3 ? say('explore') : '' });
+  if (roam.length && k.energy > 30) add(14 * t.explore, { action: 'move', target: pick(roam, rng), mood: 'curious', thought: 'Let me see what is over there.', say: rng() < 0.3 ? say('explore') : '' });
   add(6, { action: 'sit', mood: 'content', thought: 'I will just sit and look around.', say: '' });
 
   // The inner life: pressing drives pull toward what meets them, experience (beliefs with
@@ -311,7 +311,7 @@ export function instinctDecide(world, id, clock = { phase: 'day' }, rng = Math.r
   const DRIVE_W = { curiosity: 30, social: 28, expression: 22, quiet: 22 };
   for (const o of opts) {
     const d = o.d;
-    const explore = d.action === 'move' && d.thought?.startsWith('Let us see');
+    const explore = d.action === 'move' && d.thought?.startsWith('Let me see');
     const tag = d.action === 'read' || (d.action === 'move' && (d.target === 'library_isle' || explore)) ? 'curiosity'
       : d.action === 'approach' || d.action === 'give' || (d.action === 'sit' && together) ? 'social'
         : d.action === 'play' || (d.action === 'build' && d.target === 'new') ? 'expression'

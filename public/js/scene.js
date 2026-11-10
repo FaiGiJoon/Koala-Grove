@@ -8,7 +8,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { Koala } from './koala.js';
-import { spotFor, animFor, postureFor, skyAt, landRoute, carried, RESOURCE_COLORS } from './view.js';
+import { spotFor, animFor, postureFor, skyAt, landRoute, walkable, carried, RESOURCE_COLORS } from './view.js';
 import { BuildLayer } from './gfx/builds.js';
 import { gradeAt } from './gfx/grade.js';
 import { Critters } from './gfx/critters.js';
@@ -912,9 +912,9 @@ export class GroveScene {
     const moonI = 0.7 * pal.night * (0.45 + 0.55 * Math.sin(this.sky.u.uPhase.value * Math.PI));
     this.sun.intensity = lerp(moonI, sunI, sunUp);
     this.sun.color.copy(sunCol).lerp(new THREE.Color(0.62, 0.74, 1), moonW);
-    this.hemi.intensity = 0.05 + 0.5 * day;
+    this.hemi.intensity = 0.05 + 0.38 * day; // less sky fill, so the sun reads as the key light
     this.hemi.color.setRGB(...pal.top, THREE.SRGBColorSpace);
-    this.fill.intensity = 0.05 + 0.85 * day;
+    this.fill.intensity = 0.05 + 0.55 * day;
     this.fill.color.setRGB(...pal.top.map((v) => 0.8 + v * 0.2), THREE.SRGBColorSpace);
     this.scene.fog.color.setRGB(...pal.bottom, THREE.SRGBColorSpace);
     this.scene.fog.density = 0.0066 + pal.night * 0.0016;
@@ -982,12 +982,13 @@ export class GroveScene {
       v.heading += d * Math.min(1, dt * 10);
     }
     // Stay on the island, out of the pond and out of the tree trunks.
-    const r = Math.hypot(p.x, p.z);
-    const offIsland = this.buildLayer.heightAt(p.x, p.z) == null;
-    if (offIsland && this.buildLayer.heightAt(before.x, before.z) != null) {
-      p.x = before.x; // the edge of new land or a bridge: stay on it
+    const heightAt = (x, z) => this.buildLayer.heightAt(x, z);
+    const offIsland = !walkable(p, heightAt, ISLAND);
+    if (offIsland && walkable(before, heightAt, ISLAND)) {
+      p.x = before.x; // the edge of the island, new land or a bridge: stay on it
       p.z = before.z;
-    } else if (r > ISLAND - 1 && offIsland) {
+    } else if (offIsland) {
+      const r = Math.hypot(p.x, p.z);
       p.x *= (ISLAND - 1) / r;
       p.z *= (ISLAND - 1) / r;
     }
@@ -1018,8 +1019,8 @@ export class GroveScene {
     const pushes = shared.uPush.value;
     list.forEach((v, i) => {
       if (v.face == null && !v.moving && v.pos.y < 0.05) {
-        const f = list.find((o) => o !== v);
-        const df = Math.hypot(f.pos.x - v.pos.x, f.pos.z - v.pos.z);
+        const f = list.find((o) => o !== v); // undefined in a solo grove
+        const df = f ? Math.hypot(f.pos.x - v.pos.x, f.pos.z - v.pos.z) : Infinity;
         const dv = Math.hypot(vp.x - v.pos.x, vp.z - v.pos.z);
         const look = dv < 4 && !['sleep', 'fork', 'curl'].includes(v.anim) ? vp : df < 7 ? f.pos : { x: v.pos.x * 1.5, z: v.pos.z * 1.5 + 4 };
         const want = Math.atan2(look.x - v.pos.x, look.z - v.pos.z);

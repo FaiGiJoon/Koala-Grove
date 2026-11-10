@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Grove } from '../hq/grove.js';
-import { SIGHTINGS } from '../hq/grove-world.js';
+import { SIGHTINGS, DAY_MS } from '../hq/grove-world.js';
 
 const USAGE = { cost_usd: 0.002, tokens_in: 1500, tokens_out: 80, duration_ms: 900 };
 
@@ -484,4 +484,40 @@ test('review: a baby is named once; its hunger follows its mother\'s', async () 
   await openRound(grove, advance, 70000);
   const s = grove.state();
   assert.equal(s.koalas.find((k) => k.id === pip.id).hunger, s.koalas.find((k) => k.id === 'crystal').hunger);
+});
+
+test('on day 100 every koala gets a big cake from Casper and Simon, once', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-cake-'));
+  const { grove, advance } = setup({ path: path.join(dir, 'grove.sqlite') });
+  grove.play();
+  grove.heartbeat();
+  // Day 99 is 98 full grove days after the first morning (08:00); day 100 starts at minute 99*1440 - 480.
+  const minutes = (m) => (m * DAY_MS) / 1440; // a grove day is 20 real minutes
+  advance(minutes(99 * 1440 - 480 - 1));
+  grove.heartbeat();
+  grove.tick();
+  await grove.idle();
+  assert.ok(!Object.values(grove.world.koalas).some((k) => k.recent.some((m) => m.includes('big cake'))), 'no cake before day 100');
+
+  advance(minutes(2));
+  grove.heartbeat();
+  grove.tick();
+  await grove.idle();
+  for (const k of Object.values(grove.world.koalas)) {
+    assert.ok(k.recent.includes('Casper and Simon gave you a big cake to celebrate day 100 of the grove!'), `${k.name} got the cake`);
+  }
+
+  advance(minutes(1));
+  grove.heartbeat();
+  grove.tick();
+  await grove.idle();
+  for (const k of Object.values(grove.world.koalas)) {
+    assert.equal(k.recent.filter((m) => m.includes('big cake')).length, 1, `${k.name} got the cake only once`);
+  }
+});
+
+test('days with no diary are listed between the last one and today, oldest first', async () => {
+  const { daysBetween } = await import('../hq/grove.js');
+  assert.deepEqual(daysBetween('2026-11-05', '2026-11-09'), ['2026-11-06', '2026-11-07', '2026-11-08']);
+  assert.deepEqual(daysBetween('2026-11-05', '2026-11-06'), []);
 });

@@ -17,13 +17,14 @@ import { koalaArgs, researchArgs, readArgs, makeArgs, MAKE_SYSTEM, MAKE_SCHEMA, 
 import { createComputer, safeFiles } from './grove-computer.js';
 import { instinctDecide, instinctRead } from './grove-instinct.js';
 import { createLocalLlm } from './grove-local-llm.js';
-import { driftMind, experience, onBuilt, notice, consolidate, publicMind, mindOf, holdsTo, strongestToday } from './grove-mind.js';
+import { createWeb } from './grove-web.js';
+import { driftMind, experience, onBuilt, notice, consolidate, publicMind, mindOf, holdsTo, strongestToday, needsOf } from './grove-mind.js';
 import { createGithub, slug, profileMd, diaryMd, projectMd, rootMd, makeMd } from './grove-github.js';
 import { RESOURCES, ISLANDS, COSTS, START_STOCK, held, bridged, stockOf } from './grove-economy.js';
-import { BABY_NAMES, babyPersona, bornBaby, graduates } from './grove-family.js';
+import { BABY_NAMES, babyPersona, bornBaby, graduates, CAKE_DAY, CAKE_FROM, cakeMemory } from './grove-family.js';
 import { designCost } from './grove-design.js';
-import { Tickets, MAX_OPEN_TICKETS } from './grove-tickets.js';
-import { problemsOf, habitsOf, hourly, exportTabs, DAY_MS as DAY } from './grove-dashboard.js';
+import { Tickets, MAX_OPEN_TICKETS, wishTicketText } from './grove-tickets.js';
+import { problemsOf, habitsOf, hourly, exportTabs, overviewOf, searchesOf, DAY_MS as DAY } from './grove-dashboard.js';
 
 // Which brain decides. local: always the free instinct, 24/7, no page needed. hybrid: the
 // instinct, plus a real model call when a page is open and a koala was spoken to (or every
@@ -37,7 +38,8 @@ export const GROVE_DEFAULTS = {
   autoStart: false, // wake a fresh grove on start when the brain needs no tokens
   ollamaUrl: '', // a local model (Ollama) for new library pages and nightly diaries; '' is off
   ollamaModel: '', // '' picks a good installed one
-  diaryHour: 20, // the diary is written at the first nap after this hour (local time), once a day
+  localWeb: false, // koalas on instinct may look things up on Wikipedia (no tokens)
+  diaryHour: 20, // the diary is written from this hour on (local time), once a day, napping or not
   githubToken: '', // the koalas' own GitHub: a fine-grained token for one repository
   githubRepo: '', // owner/name of that repository; both empty is off
   // each koala's own computer (grove-computer.js): a sealed Docker box to test what it makes
@@ -45,7 +47,7 @@ export const GROVE_DEFAULTS = {
   computerDir: null, // where the project folders live; default work/computers next to workDir
   computerImage: 'node:24-alpine',
   docker: 'docker',
-  makesPerDay: 1, // things a koala makes a day, at its evening diary
+  makesPerDay: 3, // things a koala makes a day, at its evening diary
   makeUsd: 0.25, // --max-budget-usd for one making call (counts towards dayUsd)
   makeModel: '', // '' is the koalas' own model
   makeTimeoutMs: 240000,
@@ -61,6 +63,7 @@ export const GROVE_DEFAULTS = {
   maxMs: 60000,
   idleMaxMs: 90000,
   replyMinMs: 6000, // ...sooner when spoken to or given something
+  cast: ['crystal', 'ruby'], // the koalas in the grove (config: GROVE_KOALAS)
   replyMaxMs: 12000,
   gapMs: 12000, // never two decisions of one koala closer than this
   failMs: 60000,
@@ -90,6 +93,16 @@ const startOfDay = (ms) => {
   return d.getTime();
 };
 
+// GitHub pages are named by the UTC calendar date: 'YYYY-MM-DD'.
+const dayStr = (ms) => new Date(ms).toISOString().slice(0, 10);
+// The dates strictly between two 'YYYY-MM-DD' dates, oldest first.
+export function daysBetween(from, to) {
+  const out = [];
+  const end = Date.parse(to);
+  for (let t = Date.parse(from) + 86400000; t < end; t += 86400000) out.push(dayStr(t));
+  return out;
+}
+
 export class Grove {
   #listeners = [];
   #timer = null;
@@ -101,14 +114,17 @@ export class Grove {
   #wasPresent = false;
   #failures = 0;
 
-  constructor({ path: dbPath = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random, localLlm = undefined, github = undefined, computer = undefined } = {}) {
+  constructor({ path: dbPath = ':memory:', config = {}, think = null, now = () => Date.now(), rng = Math.random, localLlm = undefined, web = undefined, github = undefined, computer = undefined } = {}) {
     this.config = { ...GROVE_DEFAULTS, ...config };
+    // the koalas living in this grove: all of KOALAS unless the config names fewer (a solo grove)
+    this.cast = KOALAS.filter((k) => this.config.cast.includes(k.id));
     this.now = now;
     this.rng = rng;
     this.brain = think ?? ((req) => this.#callClaude(req));
     // free learning on this computer: new pages and diaries (null when not configured)
     this.localLlm = localLlm !== undefined ? localLlm
       : this.config.ollamaUrl ? createLocalLlm({ url: this.config.ollamaUrl, model: this.config.ollamaModel, now }) : null;
+    this.web = web !== undefined ? web : this.config.localWeb ? createWeb() : null;
     // the koalas' own GitHub, where each one commits its life once a day (null when off)
     this.github = github !== undefined ? github : createGithub({ token: this.config.githubToken, repo: this.config.githubRepo });
     // each koala's own sealed computer to test what it makes (null when off)
@@ -148,6 +164,7 @@ export class Grove {
       koalaLogSince: p('SELECT kind, text, action, ts FROM grove_log WHERE koala = ? AND ts >= ? ORDER BY id'),
       failures: p("SELECT ts, koala, text FROM grove_log WHERE kind = 'error' AND ts >= ? ORDER BY id DESC"),
       feed: p("SELECT * FROM grove_log WHERE kind IN ('think', 'act', 'say', 'learn', 'grow', 'error', 'ticket', 'remember') ORDER BY id DESC LIMIT ?"),
+      searches: p("SELECT * FROM grove_log WHERE kind = 'search' ORDER BY id DESC LIMIT ?"),
       sums: p(`SELECT koala, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost, COALESCE(SUM(tokens_in), 0) AS tokens_in,
         COALESCE(SUM(tokens_out), 0) AS tokens_out FROM grove_usage WHERE ts >= ? GROUP BY koala`),
       lastUsage: p('SELECT * FROM grove_usage ORDER BY id DESC LIMIT 1'),
@@ -159,12 +176,13 @@ export class Grove {
     this.tickets = new Tickets(db);
     // The koalas' world: themselves, and what they have built together.
     this.world = { koalas: {}, builds: [] };
-    for (const k of KOALAS) {
+    for (const k of this.cast) {
       const row = this.q.koala.get(k.id);
       this.world.koalas[k.id] = row ? { ...newKoala(k.id), ...JSON.parse(row.data) } : newKoala(k.id);
     }
     // the family born in the grove
-    for (const row of this.q.allKoalas.all()) if (!this.world.koalas[row.id]) this.world.koalas[row.id] = JSON.parse(row.data);
+    // (a founder left out of this grove, say Crystal in a solo grove, stays out even if its old row exists)
+    for (const row of this.q.allKoalas.all()) if (!this.world.koalas[row.id] && !KOALAS.some((x) => x.id === row.id)) this.world.koalas[row.id] = JSON.parse(row.data);
     for (const id of Object.keys(this.world.koalas)) this.#run[id] = { nextAt: Infinity, thinking: false, lastStart: 0, replyDue: false };
     this.world.builds = this.#meta('builds', []);
     this.world.stock = this.#meta('stock', { ...START_STOCK });
@@ -213,7 +231,7 @@ export class Grove {
 
   // A new koala joins the grove (a baby, born in grove.js's birth step).
   addKoala(k) {
-    this.world.koalas[k.id] = { ...newKoala(KOALAS[0].id), ...k };
+    this.world.koalas[k.id] = { ...newKoala(this.cast[0].id), ...k };
     this.#run[k.id] = { nextAt: Infinity, thinking: false, lastStart: 0, replyDue: false };
     this.#save(k.id);
     this.#emit();
@@ -364,7 +382,8 @@ export class Grove {
     const day = startOfDay(this.now());
     const done = this.#meta('diary', {});
     for (const k of this.#thinkers()) {
-      if (k.activity !== 'nap' || done[k.id] === day) continue;
+      // Once a day from diaryHour on, napping or not, so every day gets its page on GitHub.
+      if (done[k.id] === day) continue;
       done[k.id] = day;
       this.#setMeta('diary', done);
       const job = this.#diary(k.id)
@@ -400,7 +419,7 @@ export class Grove {
     // the diary entry is a strong memory; then sleep sorts the day: what mattered stays
     if (memory) notice(k, memory, 'moment', this.now(), 3);
     consolidate(k, this.now());
-    if (!memory) { this.#save(id); this.#publish(id, ''); return; }
+    if (!memory) { this.#save(id); this.#publish(id, '', true); return; }
     const trait = entry.trait.replace(/\s+/g, ' ').slice(0, 120);
     if (trait && !(k.traits ?? []).some((t) => t.toLowerCase() === trait.toLowerCase())) {
       k.traits = [...(k.traits ?? []), trait].slice(-MAX_TRAITS);
@@ -408,7 +427,7 @@ export class Grove {
     }
     this.#save(id);
     this.#log({ koala: id, kind: 'learn', text: `${k.name} wrote in the diary: ${memory}` });
-    this.#publish(id, memory);
+    this.#publish(id, memory, true);
   }
 
   // --- the koalas' own GitHub ------------------------------------------------------------
@@ -421,9 +440,9 @@ export class Grove {
   }
 
   #pub = Promise.resolve();
-  #publish(id, entry) {
+  #publish(id, entry, diary = false) {
     if (!this.github) return;
-    const job = (this.#pub = this.#pub.then(() => this.#commitLife(id, entry)).catch((err) => {
+    const job = (this.#pub = this.#pub.then(() => this.#commitLife(id, entry, diary)).catch((err) => {
       this.#log({ koala: id, kind: 'system', text: `${this.world.koalas[id].name} could not write to GitHub: ${err.message.slice(0, 160)}` });
     }));
     this.#inflight.add(job);
@@ -453,7 +472,7 @@ export class Grove {
     let p;
     if (mine) {
       p = { slug: slug(mine.title), title: mine.title, kind: 'invention', build: mine.id, started: date, notes: [] };
-      p.body = `I thought of this myself and we built it in the grove: ${String(mine.spec?.design ?? mine.title).replace(/\.+$/, '')}.`;
+      p.body = `I thought of this myself and I built it in the grove: ${String(mine.spec?.design ?? mine.title).replace(/\.+$/, '')}.`;
     } else {
       const studies = Object.entries(m.studies ?? {}).filter(([, facts]) => facts.length >= 2).sort((a, b) => b[1].length - a[1].length);
       if (!studies.length) return null;
@@ -580,14 +599,38 @@ export class Grove {
     return entry;
   }
 
-  async #commitLife(id, entry) {
+  // Days with no diary (the grove was off or paused) get a short page each, so every day is on GitHub.
+  async #backfill(id, date) {
     const k = this.world.koalas[id];
-    const date = new Date(this.now()).toISOString().slice(0, 10);
+    const last = this.#meta('diaryDates', {})[id] ?? dayStr(this.#meta('epoch', this.now()));
+    for (const d of daysBetween(last, date).slice(-30)) {
+      const path = `${id}/diary/${d}.md`;
+      try {
+        if (await this.github.read(path) != null) continue; // a real diary is already there: never overwrite it
+        await this.github.commit({ [path]: `# ${k.name}\n\n${d}\n\nNo diary was written for this day.\n` },
+          `${k.name}: ${d}, no diary`, { name: `${k.name} the koala`, email: `${id}@koala-grove.invalid` });
+      } catch (err) {
+        this.#log({ koala: id, kind: 'system', text: `${k.name} could not fill in ${d} on GitHub: ${err.message.slice(0, 160)}` });
+        return;
+      }
+    }
+  }
+
+  async #commitLife(id, entry, diary = false) {
+    const k = this.world.koalas[id];
+    const date = dayStr(this.now());
+    if (diary) await this.#backfill(id, date);
     const project = await this.#project(id);
-    const made = await this.#make(id).catch((err) => {
-      this.#log({ koala: id, kind: 'error', text: `${k.name} could not make anything today: ${String(err.message).slice(0, 160)}` });
-      return null;
-    });
+    // up to makesPerDay things a day, each made at the koala's computer
+    const makes = [];
+    for (let i = 0; i < this.config.makesPerDay; i++) {
+      const made = await this.#make(id).catch((err) => {
+        this.#log({ koala: id, kind: 'error', text: `${k.name} could not make anything today: ${String(err.message).slice(0, 160)}` });
+        return null;
+      });
+      if (!made) break;
+      makes.push(made);
+    }
     const st = this.state();
     const who = { ...this.publicApi('who', { koala: id }).koalas[0], day: this.clock().day };
     const mind = publicMind(k, this.now());
@@ -598,21 +641,34 @@ export class Grove {
       'README.md': rootMd(st.koalas, this.clock().day),
     };
     if (project) files[`${id}/projects/${project.slug}/README.md`] = projectMd(k, project);
-    if (made) {
+    for (const made of makes) {
       for (const [p, text] of Object.entries(made.files)) files[`${id}/makes/${made.slug}/${p}`] = text;
       files[`${id}/makes/${made.slug}/README.md`] = makeMd(k, made);
     }
     this.#save(id);
-    const what = [project && project.title, made && `made "${made.title}"`].filter(Boolean).join(', ');
+    const madeTitles = makes.map((m) => `made "${m.title}"`);
+    const what = [project && project.title, ...madeTitles].filter(Boolean).join(', ');
     const sha = await this.github.commit(files, `${k.name}: day ${this.clock().day}${what ? `, ${what}` : ''}`,
       { name: `${k.name} the koala`, email: `${id}@koala-grove.invalid` });
-    if (sha) this.#log({ koala: id, kind: 'grow', text: `${k.name} wrote today's page on GitHub${project ? ` and worked on "${project.title}"` : ''}${made ? `${project ? ',' : ' and'} put "${made.title}" up for everyone to see` : ''}.` });
+    if (diary) this.#setMeta('diaryDates', { ...this.#meta('diaryDates', {}), [id]: date });
+    if (sha) this.#log({ koala: id, kind: 'grow', text: `${k.name} wrote today's page on GitHub${project ? ` and worked on "${project.title}"` : ''}${makes.length ? `${project ? ',' : ' and'} put ${makes.map((m) => `"${m.title}"`).join(', ')} up for everyone to see` : ''}.` });
   }
 
   // Births when a baby is due, and babies old enough to start deciding for themselves.
   #family() {
     const w = this.world;
     const now = this.#minute();
+    // Day 100: once, every koala gets a big cake from Casper and Simon.
+    if (this.clock().day >= CAKE_DAY && !this.#meta('cake', false)) {
+      for (const k of this.#all()) {
+        k.recent.push(cakeMemory());
+        if (k.recent.length > 10) k.recent.splice(0, k.recent.length - 10);
+        this.#save(k.id);
+      }
+      this.#log({ kind: 'visitor', text: `${CAKE_FROM} gave the koalas a big cake for day ${CAKE_DAY}!`, action: 'cake' });
+      this.#setMeta('cake', true);
+      this.#emit();
+    }
     if (w.baby && now >= w.baby.due) {
       const taken = new Set(this.#all().map((k) => k.name));
       const name = BABY_NAMES.find((n) => !taken.has(n)) ?? `Joey ${this.#all().length}`;
@@ -655,6 +711,18 @@ export class Grove {
       return false;
     }
     this.#setMeta('research', { day, count: (used.day === day ? used.count : 0) + 1 });
+    return true;
+  }
+
+  // A free look on the real web, for a koala on instinct: the same daily limit as research,
+  // counted apart so that a day of paid research does not use up the free lookups.
+  #mayLookUp() {
+    if (!this.web) return false;
+    const day = startOfDay(this.now());
+    const used = this.#meta('webLookups', { day, count: 0 });
+    const count = used.day === day ? used.count : 0;
+    if (count >= this.config.researchPerDay) return false;
+    this.#setMeta('webLookups', { day, count: count + 1 });
     return true;
   }
 
@@ -720,18 +788,26 @@ export class Grove {
       : `${k.name} the koala opens a book about: ${topic}\n${about}\nTell one true thing about it as a fact the koala can remember, one idea for the grove (or empty), and one related topic the koala could wonder about next (or empty).`;
     if (offline) {
       // the computer's own model writes a new page if it can; else the instinct's bookshelf
+      // and with a real article from the web to work from, when today's lookups allow one
       let page = null;
+      let source = null;
       if (this.localLlm) {
-        try { page = await this.localLlm.read(prompt); } catch { page = null; }
+        if (this.#mayLookUp()) {
+          source = await this.web.lookup(topic).catch(() => null);
+          this.#logSearch(id, topic, source, 'wikipedia');
+        }
+        const text = source ? `${prompt}\n\nThis is what Wikipedia says in "${source.title}". Take the fact only from this:\n${source.extract}` : prompt;
+        try { page = await this.localLlm.read(text); } catch { page = null; }
         if (page && (k.learned ?? []).includes(page.fact.replace(/\s+/g, ' ').slice(0, 280))) page = null;
       }
+      const fromWeb = !!(page && source);
       page ??= instinctRead(k, topic, this.rng);
       if (!page) {
         k.recent.push(`You looked through every book about ${topic}, but you know all of it already.`);
         this.#save(id);
         return;
       }
-      return this.#learned(id, topic, page, { web: false });
+      return this.#learned(id, topic, page, { web: fromWeb });
     }
     const args = web
       ? researchArgs({ prompt, model: this.config.model, callUsd: this.config.researchUsd })
@@ -748,12 +824,20 @@ export class Grove {
       try { raw = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { raw = null; }
     }
     const fact = typeof raw?.fact === 'string' ? raw.fact.trim().replace(/\s+/g, ' ').slice(0, 280) : '';
+    if (web) this.#logSearch(id, topic, fact ? { title: fact.slice(0, 120) } : null, 'research');
     if (u) this.q.usage.run(this.now(), id, fact ? 1 : 0, u.cost_usd, u.tokens_in, u.tokens_out, u.duration_ms, web ? 'research' : 'read');
     if (!out.ok || !fact) {
       this.#log({ koala: id, kind: 'error', text: `${k.name}'s ${web ? 'research' : 'reading'} found nothing: ${out.error ?? 'no answer'}` });
       return;
     }
     return this.#learned(id, topic, raw, { web });
+  }
+
+  // Every search is written down: the query, the article (title and link) or "nothing found", and how it was done.
+  #logSearch(id, query, source, via) {
+    const title = source?.title ? source.title : 'nothing found';
+    const link = source?.url ? ` (${source.url})` : '';
+    this.#log({ koala: id, kind: 'search', action: via, target: query, text: `Searched "${query}" (${via}): ${title}${link}` });
   }
 
   // What a koala learned (a fact, maybe an idea and a new curiosity) goes into its mind.
@@ -792,6 +876,14 @@ export class Grove {
     }
     this.#save(id);
     this.#log({ koala: id, kind: 'learn', text: web ? `${k.name} looked up "${topic}" on the web: ${fact}` : `${k.name} read about ${topic}: ${fact}` });
+  }
+
+  // A new wish files a ticket too; when three tickets already wait, the wish is kept but no ticket is filed.
+  #wishTicket(id, wish) {
+    if (!String(wish ?? '').trim() || this.tickets.openCount(id) >= MAX_OPEN_TICKETS) return;
+    const t = this.tickets.open(id, wishTicketText(wish));
+    this.#log({ koala: id, kind: 'ticket', text: `${this.world.koalas[id].name} filed a ticket: ${t.title}` });
+    this.world.tickets = this.tickets.list();
   }
 
   // A koala writes a ticket (its say is the text); at most three wait at once.
@@ -892,7 +984,7 @@ export class Grove {
     if (model) {
       const req = {
         koala: id,
-        system: systemPrompt(id, this.world),
+        system: systemPrompt(id, this.world, { github: !!this.github, web: this.brainMode !== 'local' }),
         prompt: buildPrompt(this.world, id, this.clock()),
       };
       try { call = Promise.resolve(this.brain(req)); } catch (err) { call = Promise.reject(err); }
@@ -963,6 +1055,8 @@ export class Grove {
     this.world.minute = this.#minute();
     const logs = applyDecision(this.world, id, decision);
     for (const entry of logs) this.#log(entry);
+    // a new wish is also a ticket, so the visitor sees what Ruby is hoping for
+    if (logs.some((e) => e.kind === 'wish')) this.#wishTicket(id, decision.wish);
     // the inner life: drives, the moment noticed, lessons learned, promises made and kept
     {
       const k = this.world.koalas[id];
@@ -986,11 +1080,11 @@ export class Grove {
     for (const other of this.#all()) this.#save(other.id);
     this.#setMeta('builds', this.world.builds);
     this.#setMeta('stock', this.world.stock);
-    const friend = friendOf(this.world, id).id;
+    const friend = friendOf(this.world, id)?.id; // undefined in a solo grove
     if (decision.say) {
       const here = this.world.koalas[id].place;
       for (const o of this.#thinkers()) if (o.id !== id && (o.id === friend || o.place === here)) this.#nudge(o.id);
-    } else if (decision.action === 'give' || decision.action === 'approach') {
+    } else if (friend && (decision.action === 'give' || decision.action === 'approach')) {
       this.#nudge(friend);
     }
     const quiet = r.calm && !decision.say && !r.replyDue;
@@ -1146,7 +1240,19 @@ export class Grove {
       hourly: hourly(usage, now),
       last24: { byKoala, kinds, avgSeconds: durations.length ? durations.reduce((a, u) => a + u.duration_ms, 0) / durations.length / 1000 : null },
       feed: this.q.feed.all(60),
+      overview: this.#overview(st),
     };
+  }
+
+  // The overview: the first koala's wish, drives, latest searches and open tickets.
+  #overview(st) {
+    const first = this.#all().find((k) => !k.follows) ?? this.#all()[0] ?? null;
+    return overviewOf({
+      koala: first,
+      needs: first ? needsOf(this.world.koalas[first.id]) : {},
+      tickets: st.tickets,
+      searches: searchesOf(this.q.searches.all(50)),
+    });
   }
 
   // Everything recorded, for the Google Sheets export.

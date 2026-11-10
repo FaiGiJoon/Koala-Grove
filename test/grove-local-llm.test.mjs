@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocalLlm, pickModel } from '../hq/grove-local-llm.js';
+import { createWeb } from '../hq/grove-web.js';
 import { Grove } from '../hq/grove.js';
 
 test('pickModel prefers a good installed model, honours an explicit one, and copes with none', () => {
@@ -73,6 +74,87 @@ test('on instinct, the local model writes new pages: the koalas keep learning pa
   const learned = grove.state().koalas.flatMap((k) => k.learned ?? []);
   assert.ok(learned.some((f) => f.startsWith('Fresh fact')), 'learned from the local model');
   assert.equal(grove.state().usage.today.calls, 0);
+  grove.close();
+});
+
+test('web lookup: finds the Wikipedia article for a topic, and answers null when it cannot', async () => {
+  const urls = [];
+  const web = createWeb({
+    fetchImpl: async (url) => {
+      urls.push(url);
+      return { ok: true, json: async () => ({ query: { pages: [{ title: 'Cepheid variable', extract: 'A Cepheid is a star that pulsates.', fullurl: 'https://en.wikipedia.org/wiki/Cepheid_variable' }] } }) };
+    },
+  });
+  const hit = await web.lookup('Cepheid');
+  assert.equal(hit.title, 'Cepheid variable');
+  assert.equal(hit.extract, 'A Cepheid is a star that pulsates.');
+  assert.match(urls[0], /^https:\/\/en\.wikipedia\.org\/w\/api\.php\?/);
+  assert.match(urls[0], /gsrsearch=Cepheid/);
+
+  // an article that only happens to match, like "Headless Horseman" for sleepy animals, is no answer
+  const article = (title) => createWeb({ fetchImpl: async () => ({ ok: true, json: async () => ({ query: { pages: [{ title, extract: 'Some text.' }] } }) }) });
+  assert.equal(await article('Headless Horseman').lookup('sleepy animals'), null);
+  assert.equal((await article('Koala').lookup('How do koalas find water?')).title, 'Koala');
+  assert.equal(await article('What Women Want').lookup('What is water?'), null);
+
+  assert.equal(await createWeb({ fetchImpl: async () => { throw new Error('offline'); } }).lookup('x'), null);
+  assert.equal(await createWeb({ fetchImpl: async () => ({ ok: true, json: async () => ({}) }) }).lookup('x'), null);
+  assert.equal(await createWeb({ fetchImpl: async () => ({ ok: false, json: async () => ({}) }) }).lookup('x'), null);
+});
+
+function groveWithWeb(llm, lookup, researchPerDay) {
+  let t = new Date(2026, 10, 7, 8, 0).getTime();
+  const grove = new Grove({
+    config: { brain: 'local', localReadsPerDay: 1000, researchPerDay },
+    think: async () => { throw new Error('no Claude on instinct'); },
+    now: () => t,
+    rng: Math.random,
+    localLlm: llm,
+    web: { lookup },
+    github: null,
+  });
+  return { grove, advance: (ms) => (t += ms) };
+}
+
+test('on instinct, a koala looks things up on the real web and the local model writes it down, without Claude', async () => {
+  const prompts = [];
+  let n = 0;
+  const llm = {
+    model: 'fake',
+    read: async (p) => { prompts.push(p); return { fact: `Web fact number ${++n} from the article.`, idea: '', curiosity: '' }; },
+    diary: async () => null,
+  };
+  let lookups = 0;
+  const { grove, advance } = groveWithWeb(llm, async () => { lookups++; return { title: 'Koala', extract: 'Koalas sleep most of the day.', url: 'u' }; }, 2);
+  grove.play();
+  const seen = []; // the state only carries the latest log rows, so collect them along the way
+  for (let m = 0; m < 240; m++) {
+    await run(grove, advance, 1);
+    seen.push(...grove.state().log);
+  }
+  assert.ok(prompts.some((p) => p.includes('Koalas sleep most of the day.')), 'the article reaches the local model');
+  assert.ok(seen.some((l) => l.kind === 'learn' && /on the web/.test(l.text)), 'remembered as found on the web');
+  assert.equal(lookups, 2, 'no more than the day\'s research limit');
+  assert.ok(prompts.length > 2, 'after the limit the koalas go on reading books');
+  assert.equal(grove.state().usage.today.calls, 0, 'nothing spent');
+  grove.close();
+});
+
+test('on instinct, a failed web lookup falls back to an ordinary book', async () => {
+  const llm = {
+    model: 'fake',
+    read: async () => ({ fact: 'A fact from an ordinary book page.', idea: '', curiosity: '' }),
+    diary: async () => null,
+  };
+  const { grove, advance } = groveWithWeb(llm, async () => null, 16);
+  grove.play();
+  const learns = []; // the state only carries the latest log rows, so collect them along the way
+  for (let m = 0; m < 240; m++) {
+    await run(grove, advance, 1);
+    learns.push(...grove.state().log.filter((l) => l.kind === 'learn'));
+  }
+  assert.ok(learns.length > 0, 'still learning');
+  assert.ok(!learns.some((l) => /on the web/.test(l.text)), 'not claimed as the web');
   grove.close();
 });
 

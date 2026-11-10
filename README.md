@@ -79,8 +79,12 @@ does the best one:
 - **Reading** on instinct uses a shelf of 40 short, true picture-book pages (stars, the moon,
   crystals, sleepy animals, frogs, bridges, poems...). A koala gets the page that best matches
   its topic and interests and has not read yet, it grows wiser the same way, and a page can give
-  it an idea or a new curiosity. At most `GROVE_LOCAL_READS_PER_DAY` pages a day (48). Research
-  needs the web, so on instinct a research question becomes a look in the books.
+  it an idea or a new curiosity. At most `GROVE_LOCAL_READS_PER_DAY` pages a day (48).
+- **The web, without Claude.** When Ollama is running, a koala reading on instinct can look its
+  topic up on Wikipedia, and the local model writes what it finds as a memory, up to
+  `GROVE_RESEARCH_PER_DAY` lookups a day (16). An article whose title shares no word with the
+  topic is ignored, and with no article the koala reads a book instead. `GROVE_LOCAL_WEB=off`
+  turns this off.
 
 **Getting smarter every day, still free.** If [Ollama](https://ollama.com) runs on the same
 computer, the koalas use it (`GROVE_OLLAMA_URL`, default `http://127.0.0.1:11434`) for the two
@@ -485,6 +489,7 @@ All settings are environment variables.
 | `GROVE_PUBLIC_HOSTS` | (none) | Comma-separated host names (a tunnel) allowed to read the public `/api/v1`, and nothing else. |
 | `GROVE_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama for free new library pages and nightly diaries; `off` turns it off. |
 | `GROVE_OLLAMA_MODEL` | (auto) | Which installed Ollama model to use; empty picks one (gemma4, llama3.2, qwen2.5, ...). |
+| `GROVE_LOCAL_WEB` | (on) | Koalas on instinct look things up on Wikipedia; `off` keeps them to their books. |
 | `GROVE_MODEL` | `claude-haiku-5-5` | Model for the koalas' decisions. |
 | `GROVE_DAY_USD` | `0.5` | Real spend per day after which the koalas stop thinking until midnight. |
 | `GROVE_CALL_USD` | `0.05` | Spending cap per decision, passed to `--max-budget-usd` (at most 1). |

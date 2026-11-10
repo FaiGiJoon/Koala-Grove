@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { customPlan, panelStartsCollapsed, postureFor, critterPath, stockText, carried, RESOURCE_COLORS, landRoute, spotFor, animFor, fmtUsd, fmtTokens, freshLog, statusOf, skyAt } from '../public/js/view.js';
+import { customPlan, panelStartsCollapsed, postureFor, critterPath, stockText, carried, RESOURCE_COLORS, landRoute, spotFor, animFor, fmtUsd, fmtTokens, freshLog, statusOf, skyAt, walkable } from '../public/js/view.js';
 import { PLACES } from '../hq/grove-world.js';
 
 test('koalas at the same place stand apart, and stand beside the pond, not in it', () => {
@@ -201,4 +201,14 @@ test('statusOf: on instinct the grove is live with no page and past the cap', ()
   assert.equal(statusOf({ ...base, capped: false, brain: { mode: 'hybrid' } }).key, 'live');
   assert.equal(statusOf({ ...base, brain: { mode: 'claude' } }).key, 'capped');
   assert.equal(statusOf({ ...base, playing: false, brain: { mode: 'local' } }).key, 'paused');
+});
+
+test('a visitor can step from a bridge back onto the main island (and not off the edge)', () => {
+  // A fake bridge running out from the island's edge along +x, from radius 21.5 to 30.
+  const bridge = (x, z) => (x >= 21.5 && x <= 30 && Math.abs(z) < 0.9 ? 1 : null);
+  assert.ok(walkable({ x: 21.5, z: 0 }, bridge), 'the bridge foot is ground');
+  assert.ok(walkable({ x: 20, z: 0 }, bridge), 'the main island is ground, so stepping off the bridge onto it is allowed');
+  assert.ok(walkable({ x: 0, z: 0 }, bridge));
+  assert.ok(!walkable({ x: 25, z: 3 }, bridge), 'beside the bridge, over the sea, is not ground');
+  assert.ok(!walkable({ x: 0, z: 25 }, () => null), 'out past the island edge is not ground');
 });

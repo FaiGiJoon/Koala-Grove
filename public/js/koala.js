@@ -75,7 +75,7 @@ export class Koala {
     // A solid, shadow-casting body part with fur shells over it.
     const fur = (geo, tint, { length = 0.045, density = 1.3, parent = rig, tip = null } = {}) => {
       const grp = new THREE.Group();
-      const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: new THREE.Color(tint).multiplyScalar(0.8), roughness: 0.97 }));
+      const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: new THREE.Color(tint).multiplyScalar(0.88), roughness: 0.97 }));
       body.castShadow = true;
       body.receiveShadow = true;
       grp.add(body);
