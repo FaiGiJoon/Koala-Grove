@@ -6,7 +6,11 @@ async function request(url, opts) {
   const res = await fetch(url, opts);
   let body = {};
   try { body = await res.json(); } catch { /* no JSON body */ }
-  if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(body.error || `request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
   return body;
 }
 

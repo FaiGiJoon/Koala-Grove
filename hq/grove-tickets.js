@@ -4,6 +4,11 @@
 export const MAX_OPEN_TICKETS = 3; // per koala
 const MAX_TEXT = 300;
 
+// A new wish becomes a ticket, in the koala's own words: "I wish: ...".
+export function wishTicketText(wish) {
+  return `I wish: ${String(wish ?? '').trim()}`.slice(0, MAX_TEXT);
+}
+
 export class Tickets {
   constructor(db) {
     this.db = db;

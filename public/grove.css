@@ -248,7 +248,7 @@ h3 { color: var(--muted); }
 #name-baby label { display: block; margin: var(--s-3) 0 var(--s-2); font-size: var(--fs-s); color: var(--muted); }
 #name-baby .talkrow { display: flex; gap: var(--s-2); }
 #name-baby input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: var(--r-s); border: 1px solid var(--line); background: rgba(0, 0, 0, 0.3); color: var(--text); font: 15px var(--sans); }
-#name-baby .btn { background: var(--mint); color: var(--mint-ink); }
+#name-baby .btn:not(.ghost) { background: var(--mint); color: var(--mint-ink); }
 #hint { position: fixed; bottom: 14px; left: calc((100% - 420px) / 2); transform: translateX(-50%); z-index: 3; padding: 7px 14px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); font: var(--fs-xs) var(--mono); color: var(--muted); white-space: nowrap; pointer-events: none; backdrop-filter: blur(8px); }
 #toast { padding: 11px 18px; border-radius: var(--r-m); font: 700 var(--fs-m) var(--sans); box-shadow: var(--shadow); }
 
@@ -387,3 +387,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 #inspector .inner-notes { list-style: none; padding: 0; margin: var(--s-2) 0 0; display: grid; gap: 4px; }
 #inspector .inner-notes b { color: var(--text, #e8eef5); font-weight: 600; margin-right: 4px; }
 #inspector .inner-notes .ev { opacity: 0.6; }
+
+/* Overview: Ruby's wish, drives, searches and open tickets at a glance */
+.dash-overview { margin-bottom: 12px; }
+.dash-overview h4 { margin: 0 0 6px; font-size: 0.95em; opacity: 0.85; }
+.dash-overview .dwish { font-size: 1.1em; margin: 2px 0 10px; }
+.dash-overview .dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.dash-overview .ddrive { display: grid; grid-template-columns: 96px 1fr; gap: 8px; align-items: center; margin: 4px 0; }
+.dash-overview .dlist li .k { margin: 0 4px; opacity: 0.7; font-size: 0.85em; }

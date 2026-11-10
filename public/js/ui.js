@@ -88,8 +88,11 @@ export function createUI({ scene, api }) {
       nameForm.hidden = true;
     } catch (err) {
       toast(err.message);
+      // 409: already named, or too old to name. Nothing more to do here, so close the form.
+      if (err.status === 409) nameForm.hidden = true;
     }
   });
+  $('#baby-later').addEventListener('click', () => { nameForm.hidden = true; });
   function offerName() {
     const baby = state.koalas.find((k) => k.parents && !k.named && !asked.has(k.id));
     if (!baby || !nameForm.hidden) return;
@@ -349,7 +352,7 @@ export function createUI({ scene, api }) {
           <label>Bond</label>${bondBar(k.bond)}
         </div>
         <div class="holds">${growthLine(k)}</div>
-        <div class="opinion">${k.opinion ? `On ${esc(friend(k).name)}: “${esc(k.opinion)}”` : `No opinion of ${esc(friend(k).name)} yet.`}</div>
+        ${friend(k) ? `<div class="opinion">${k.opinion ? `On ${esc(friend(k).name)}: “${esc(k.opinion)}”` : `No opinion of ${esc(friend(k).name)} yet.`}</div>` : ''}
         <div class="holds">Holding: ${k.inventory.length ? k.inventory.map(esc).join(', ') : 'nothing'}</div>
         <div class="holds">${k.wish ? `Wish: “${esc(k.wish)}”` : 'No wish yet.'}</div>
         <div class="holds mind">${esc(k.wisdomLabel ?? 'Curious baby')} · wisdom ${Math.round(k.wisdom ?? 0)}${k.nextWisdom ? ` (${esc(k.nextWisdom.label)} at ${k.nextWisdom.at})` : ''}</div>

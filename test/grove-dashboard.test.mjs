@@ -200,7 +200,8 @@ test('google: the callback checks the state once, sends the verifier, and keeps 
   assert.equal(challenge, u.searchParams.get('code_challenge'));
   assert.equal(sent.get('client_secret'), 'CS');
   const file = path.join(dir, 'google-token.json');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // POSIX permission bits do not exist on Windows, so only check them where they mean something
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).refresh_token, 'RT');
   assert.deepEqual(g.status(), { configured: true, connected: true, needsReconnect: false });
   await assert.rejects(g.callback({ code: 'C', state }), /expired/, 'a state works once');

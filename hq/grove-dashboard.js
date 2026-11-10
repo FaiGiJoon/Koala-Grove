@@ -169,3 +169,34 @@ export function exportTabs({ koalas, log, usage, now, model }) {
 }
 
 const round = (x) => Math.round(x * 10000) / 10000;
+
+// The searches a koala made, newest first. Rows are grove_log rows of kind 'search', whose text is
+// `Searched "<query>" (<via>): <title or "nothing found">` with ` (<url>)` after the title when there is a link.
+export function searchesOf(rows, limit = 10) {
+  const out = [];
+  for (const r of rows) {
+    if (out.length >= limit) break;
+    if (r.kind !== 'search') continue;
+    const text = String(r.text ?? '');
+    const via = r.action ?? '';
+    const head = `Searched "${r.target ?? ''}" (${via}): `;
+    const rest = text.startsWith(head) ? text.slice(head.length) : text;
+    const link = rest.match(/ \((https?:\/\/\S+)\)$/);
+    const title = link ? rest.slice(0, link.index) : rest;
+    out.push({ ts: r.ts, query: r.target ?? '', via, title: title === 'nothing found' ? null : title, url: link ? link[1] : '' });
+  }
+  return out;
+}
+
+// What the owner sees about one koala: its wish, how pressing each drive is (0..1), its latest searches
+// and its open tickets. With no koala, every list is empty and the wish is null.
+export function overviewOf({ koala = null, needs = {}, tickets = [], searches = [] } = {}) {
+  if (!koala) return { name: null, wish: null, drives: [], searches: [], openTickets: [] };
+  return {
+    name: koala.name,
+    wish: koala.wish || null,
+    drives: Object.entries(needs).map(([name, value]) => ({ name, value })),
+    searches,
+    openTickets: tickets.filter((t) => t.status === 'open' && t.koala === koala.id).map((t) => ({ id: t.id, text: t.text, created: t.created ?? null })),
+  };
+}

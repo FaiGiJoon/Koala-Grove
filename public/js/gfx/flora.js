@@ -41,8 +41,8 @@ export function bladeGeometry() {
   const idx = [];
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;
-    const w = 0.05 * (1 - t * 0.9);
-    const z = 0.22 * t * t;
+    const w = 0.05 * (1 - t * 0.75); // a blunter tip, so near blades do not read as spikes
+    const z = 0.18 * t * t;
     const g = 0.4 + 0.6 * t;
     if (i < segs) {
       pos.push(-w, t, z, w, t, z);
@@ -90,7 +90,7 @@ export function buildGrass({ terrain, capacity, seed = 12 }) {
     if (terrain.pathMask(cx, cz) > 0.4 || terrain.height(cx, cz) < WATER_Y + 0.04) continue;
     const moist = Math.max(0, 1 - Math.hypot(cx - pond.x, cz - pond.z) / 12); // lusher near the pond
     const clump = 6 + Math.floor(r() * 9);
-    const base = c.setHSL(0.235 + r() * 0.05 - moist * 0.015, 0.28 + r() * 0.16, 0.36 + r() * 0.12 + moist * 0.03).clone();
+    const base = c.setHSL(0.225 + r() * 0.07 - moist * 0.015, 0.22 + r() * 0.14, 0.34 + r() * 0.14 + moist * 0.03).clone();
     for (let k = 0; k < clump && n < capacity; k++) {
       const x = cx + (r() - 0.5) * 0.8;
       const z = cz + (r() - 0.5) * 0.8;
@@ -102,7 +102,7 @@ export function buildGrass({ terrain, capacity, seed = 12 }) {
       p.set(x, terrain.height(x, z) - 0.02, z);
       m.compose(p, q, s);
       mesh.setMatrixAt(n, m);
-      mesh.setColorAt(n, c.copy(base).offsetHSL((r() - 0.5) * 0.03, 0, (r() - 0.5) * 0.08));
+      mesh.setColorAt(n, c.copy(base).offsetHSL((r() - 0.5) * 0.05, 0, (r() - 0.5) * 0.1));
       n++;
     }
   }

@@ -2,6 +2,8 @@
 // from its next move. Everything here is pure: the Grove (grove.js) owns time,
 // storage and the model calls, and asks these functions what a decision means.
 
+// The whole cast. A grove can run with only some of them (GROVE_KOALAS, see config.js): a koala
+// with no friend in the grove sits instead of approaching, giving or nesting.
 export const KOALAS = [
   {
     id: 'crystal',
@@ -176,7 +178,10 @@ export function others(world, id) {
 // The koala this one does things with (approach, give): the other founder, or a young koala's parent.
 export function friendOf(world, id) {
   const founder = byId(id);
-  if (founder) return world.koalas[KOALAS.find((x) => x.id !== id).id];
+  if (founder) {
+    const other = KOALAS.find((x) => x.id !== id);
+    return world.koalas[other?.id] ?? null; // a solo grove has no friend: null
+  }
   const k = world.koalas[id];
   return world.koalas[k.parents?.find((p) => world.koalas[p])] ?? others(world, id)[0];
 }
@@ -427,6 +432,8 @@ function describeBuild({ b, started, together }) {
 export function applyDecision(world, id, d) {
   const k = world.koalas[id];
   const f = friendOf(world, id);
+  // solo grove: nobody to approach, give to or nest with, so the koala sits instead
+  if (!f && ['approach', 'give', 'nest'].includes(d.action)) d = { ...d, action: 'sit', target: '' };
   const rest = others(world, id);
   const tell = (text, who = rest) => { for (const o of who) push(o.recent, text, MAX_RECENT); };
   let step = null;
@@ -519,7 +526,7 @@ export function applyDecision(world, id, d) {
     : d.action === 'gather' ? `gathered ${d.target} at the ${places[k.place]?.name ?? k.place}`
     : d.action === 'nest' ? (nested ? `made a nest with ${f.name}` : 'started making a cozy nest')
     : stored ? (Object.keys(stored).length ? `stored ${amounts(stored)} in the Stockpile` : 'went to the Stockpile with empty paws')
-    : describe(d, f.name, k.strength, places);
+    : describe(d, f?.name ?? '', k.strength, places);
   push(k.recent, `You ${did}.`, MAX_RECENT);
   if (step?.together) tell(`${k.name} helped you build the ${step.b.title}.`, rest.filter((o) => o.place === k.place));
   else if (!['give', 'approach', 'nest'].includes(d.action)) tell(`${k.name} ${did} near you.`, rest.filter((o) => o.place === k.place));
@@ -578,12 +585,25 @@ export function groveClock(ms) {
 
 const level = (v, words) => words[Math.min(words.length - 1, Math.floor(v / (100 / words.length)))];
 
-export function systemPrompt(id, world = null) {
+// facts: what this grove can really do, so a koala answers a visitor honestly.
+// github: its diary and projects go to a GitHub repository (a token is set); web: a research
+// trip can use the internet (the brain is on and has tokens to spend).
+export function systemPrompt(id, world = null, facts = {}) {
   const k = byId(id) ?? world?.koalas[id];
-  const f = byId(id) ? other(id) : friendOf(world, id);
-  const family = world ? others(world, id).filter((o) => o.id !== f.id).map((o) => o.name) : [];
+  const f = world ? friendOf(world, id) : other(id);
+  const family = world ? others(world, id).filter((o) => o.id !== f?.id).map((o) => o.name) : [];
+  const abilities = [
+    'What you can really do: read the picture books at the library, and look things up on the web at Library Isle'
+      + (facts.web ? '.' : ', but only when the grove has tokens to spend; otherwise you read the picture books.'),
+    facts.github
+      ? 'Your diary and your projects are written down on the grove\'s GitHub, once a day.'
+      : 'Your diary is kept in the grove, not on GitHub, so you cannot show anyone a GitHub page.',
+    'You cannot browse the internet any other time, and you cannot see the visitor\'s computer.',
+  ].join(' ');
   return [
-    `You are ${k.name}, a koala living in a small eucalyptus grove with ${f.name}, a ${f.gender} (${PRONOUNS[f.gender] ?? 'they/them'})${family.length ? `, and your family: ${family.join(', ')}` : ''}.`,
+    f
+      ? `You are ${k.name}, a koala living in a small eucalyptus grove with ${f.name}, a ${f.gender} (${PRONOUNS[f.gender] ?? 'they/them'})${family.length ? `, and your family: ${family.join(', ')}` : ''}.`
+      : `You are ${k.name}, a koala living alone in a small eucalyptus grove.`,
     k.persona,
     `You have your own mind and your own life. You are curious about: ${interestsOf(k).join(', ') || 'everything'}.`,
     'Follow your curiosity: visit the library to read or look things up, then talk about what you learned and let it inspire what you build.',
@@ -592,6 +612,8 @@ export function systemPrompt(id, world = null) {
     'You are both babies. You grow stronger the more you climb, play, eat and rest, and when you are stronger you can climb higher and carry more.',
     'Stay in character. You are a koala: you think and talk like one, simply and warmly, in short sentences.',
     'A human visitor sometimes walks around the grove, gives you things or talks to you.',
+    'When the visitor asks you a question, answer it out loud, in your own words, and say plainly what you know and what you do not.',
+    abilities,
     'Each turn you choose one thing to do next. Reply with only a JSON object matching the given schema:',
     'thought (private), action, target, say (out loud, or empty), mood, remember (or empty), bond (-3..3), opinion (or empty), wish (something you would love to do or make one day, or empty to keep your wish), trait (something new about who you are, or empty).',
     'Leave remember empty unless something new and important happened that is not already in what you remember.',
@@ -663,24 +685,37 @@ function mindLines(k) {
   ].filter((l, i, a) => l !== '' || a[i - 1] !== '');
 }
 
+// What the visitor last said to this koala, if the koala has not answered it yet.
+export function unansweredVisitorWords(k) {
+  for (let i = k.recent.length - 1; i >= 0; i--) {
+    if (k.recent[i].startsWith('You said:')) return null;
+    const m = /^The visitor said: "(.*)"$/.exec(k.recent[i]);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 export function buildPrompt(world, id, clock) {
   const k = world.koalas[id];
+  const heard = unansweredVisitorWords(k);
   const f = friendOf(world, id);
   const places = placesOf(world);
   const place = (p) => `${places[p]?.name ?? p} (${p})`;
   const g = growthOf(k);
-  const fg = growthOf(f);
+  const fg = f ? growthOf(f) : null;
   const lines = [
     `It is ${clock.label}, ${clock.phase}.`,
     `You are at the ${place(k.place)}, ${k.activity === 'nap' ? 'napping' : `last action: ${k.activity}`}.`,
     `Hunger: ${level(k.hunger, ['full', 'peckish', 'hungry', 'starving'])}. Energy: ${level(k.energy, ['exhausted', 'tired', 'awake', 'full of beans'])}.`,
     `You are a ${g.stageLabel.toLowerCase()}, strength ${Math.round(k.strength)} of 100${g.nextStage ? ` (a ${g.nextStage.label.toLowerCase()} at ${g.nextStage.at})` : ''}. `
-      + `You can climb about ${Math.round(g.reach * 100)}% of the way up a tree and hold ${g.carry} things. ${f.name} is a ${fg.stageLabel.toLowerCase()}.`,
+      + `You can climb about ${Math.round(g.reach * 100)}% of the way up a tree and hold ${g.carry} things.${f ? ` ${f.name} is a ${fg.stageLabel.toLowerCase()}.` : ''}`,
     `You hold: ${k.inventory.length ? k.inventory.join(', ') : 'nothing'}. You carry: ${amounts(k.res ?? {})} (paws hold ${carryLimit(k.strength)} things in all).`,
     `Here you can gather: ${(SOURCES[k.place] ?? []).join(', ') || 'nothing'}.`,
-    `${f.name} is at the ${place(f.place)}, ${f.activity === 'nap' ? 'napping' : `doing: ${f.activity}`}, looking ${f.mood}.`,
-    `How you feel about ${f.name}: ${k.bond} (from -100 to 100). ${k.opinion ? `You think: "${k.opinion}"` : 'You have no firm opinion yet.'}`,
-    ...others(world, id).filter((o) => o.id !== f.id).map((o) => `${o.name} is a ${growthOf(o).stageLabel.toLowerCase()}${o.follows ? ` who follows ${world.koalas[o.follows]?.name ?? 'a parent'} everywhere` : ''}, at the ${place(o.place)}.`),
+    ...(f ? [
+      `${f.name} is at the ${place(f.place)}, ${f.activity === 'nap' ? 'napping' : `doing: ${f.activity}`}, looking ${f.mood}.`,
+      `How you feel about ${f.name}: ${k.bond} (from -100 to 100). ${k.opinion ? `You think: "${k.opinion}"` : 'You have no firm opinion yet.'}`,
+    ] : ['You are alone in the grove for now.']),
+    ...others(world, id).filter((o) => o.id !== f?.id).map((o) => `${o.name} is a ${growthOf(o).stageLabel.toLowerCase()}${o.follows ? ` who follows ${world.koalas[o.follows]?.name ?? 'a parent'} everywhere` : ''}, at the ${place(o.place)}.`),
     '',
     'Things you remember:',
     ...(k.memories.length ? k.memories.slice(-PROMPT_MEMORIES).map((m) => `- ${m}`) : ['- nothing yet']),
@@ -690,6 +725,11 @@ export function buildPrompt(world, id, clock) {
     ...mindLines(k),
     '',
     ...ticketLines(world, id),
+    ...(heard === null ? [] : [
+      `THE VISITOR IS TALKING TO YOU AND IS WAITING. They just said to you: "${heard}"`,
+      'Answer them now: put your reply in say, in your own words, in short sentences, and say honestly what you know or do not know. Then you may do your next thing.',
+      '',
+    ]),
     'What happened just now (oldest first):',
     ...(k.recent.length ? k.recent.slice(-PROMPT_RECENT).map((r) => `- ${r}`) : ['- nothing yet']),
     '',
@@ -697,10 +737,10 @@ export function buildPrompt(world, id, clock) {
     `Places: ${Object.keys(places).map(place).join(', ')}. Eucalyptus grows on: ${TREES.join(', ')}.`,
     ...buildLines(world),
     'Actions: move (target: place), eat (target: a tree), climb (target: a tree), nap, play (target: ball, swing or pond),',
-    `approach (go to ${f.name}), give (target: an item you hold, to ${f.name}),`,
+    ...(f ? [`approach (go to ${f.name}), give (target: an item you hold, to ${f.name}),`] : []),
     `gather (target: a resource found where you are; wood at the gum trees, water at the pond, stone at the lookout, more on islands you bridge to), store (carry what you hold to the Stockpile),`,
     'build (target: a thing you can build listed above, or new for something you invent (then give a build_name and a build_design); empty to keep working on what is underway),',
-    ...(canNest(world, id, f.id).ok ? [`nest (with ${f.name}, to start a family; you both need to choose it),`] : []),
+    ...(f && canNest(world, id, f.id).ok ? [`nest (with ${f.name}, to start a family; you both need to choose it),`] : []),
     'file_ticket (when there is a problem you cannot solve, write it in say for the visitor to read and answer),',
     ...(canReadAt(world, k.place) ? ['read (target: a topic you are curious about; open a book about it),'] : []),
     ...(canReadAt(world, k.place) ? ['research (target: a question to look up on the web; build on what you know and ask something deeper),'] : []),

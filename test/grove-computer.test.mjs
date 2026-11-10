@@ -98,6 +98,10 @@ function fakeGithub() {
     if (init.method === 'POST' && p === '/git/trees') { for (const e of body.tree) files[e.path] = e.content; return json(201, { sha: `t-${commits.length + 1}` }); }
     if (init.method === 'POST' && p === '/git/commits') { commits.push(body); return json(201, { sha: `c${commits.length}` }); }
     if (init.method === 'PATCH') { head = body.sha; return json(200, {}); }
+    if (init.method === 'GET' && p.startsWith('/contents/')) {
+      const path = decodeURI(p.slice('/contents/'.length).split('?')[0]);
+      return path in files ? json(200, { content: Buffer.from(files[path]).toString('base64') }) : json(404, { message: 'Not Found' });
+    }
     return json(404, { message: 'Not Found' });
   };
   return { files, commits, gh: createGithub({ token: 'github_pat_x', repo: 'koalas/life', fetchImpl }) };
@@ -114,7 +118,7 @@ const game = (extra = {}) => ({
   test: 'node test.js', next: 'Add a moon to land on.', ...extra,
 });
 
-function makingGrove({ brain, testResults = [], computerOn = true, mode = 'claude' }) {
+function makingGrove({ brain, testResults = [], computerOn = true, mode = 'claude', makesPerDay = 1 }) {
   const f = fakeGithub();
   const tests = [];
   const computer = {
@@ -127,7 +131,7 @@ function makingGrove({ brain, testResults = [], computerOn = true, mode = 'claud
     if (req.kind !== 'make') return { ok: false, raw: null, usage: null, error: 'not in this test' };
     return brain(req, calls.filter((c) => c.kind === 'make').length);
   };
-  const grove = new Grove({ config: { brain: mode }, think, localLlm: null, github: f.gh, computer });
+  const grove = new Grove({ config: { brain: mode, makesPerDay }, think, localLlm: null, github: f.gh, computer });
   grove.heartbeat();
   return { grove, f, tests, calls };
 }
@@ -203,7 +207,7 @@ test('a local model (Ollama) makes things for free when Claude is off', async ()
   const f = fakeGithub();
   const asked = [];
   const localLlm = { model: 'gemma4', make: async (system, prompt) => { asked.push({ system, prompt }); return game({ title: 'Moon Calculator', kind: 'calculator' }); } };
-  const grove = new Grove({ config: { brain: 'local' }, localLlm, github: f.gh, computer: null });
+  const grove = new Grove({ config: { brain: 'local', makesPerDay: 1 }, localLlm, github: f.gh, computer: null });
   await grove.publishNow();
   assert.equal(asked.length, 2);
   assert.match(asked[0].system, /Nobody tells you what to make/);
@@ -227,5 +231,39 @@ test('a koala can keep working on what it made: it sees its files and the same t
   assert.match(second.prompt, /The last thing you made is "Star Hop"[\s\S]*--- game\.js[\s\S]*You wanted to: Add a moon\./);
   assert.match(f.files['ruby/makes/star-hop/README.md'], /started 2026-11-08, last worked on 2026-11-09/);
   assert.ok(grove.state().log.some((l) => /worked on a game on the computer/.test(l.text)));
+  grove.close();
+});
+
+test('every day gets a diary page on GitHub, napping or not, and a day the grove missed is filled in', async () => {
+  let t = Date.parse('2026-11-06T21:00:00');
+  const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const f = fakeGithub();
+  const grove = new Grove({ config: { brain: 'local', makesPerDay: 1 }, localLlm: null, computer: null, github: f.gh, now: () => t });
+  grove.play();
+  grove.heartbeat();
+  grove.tick();
+  await grove.idle();
+  const first = day(t);
+  assert.match(f.files[`crystal/diary/${first}.md`] ?? '', /\S/, 'the first day has a diary, though no koala napped');
+
+  // The grove is off for a day; the next evening it writes today's page and fills the gap.
+  t += 2 * 24 * 3600 * 1000;
+  const missedDay = day(t - 24 * 3600 * 1000);
+  f.files[`ruby/diary/${missedDay}.md`] = 'A real diary, written earlier.'; // already on GitHub: must not be overwritten
+  grove.heartbeat();
+  grove.tick();
+  await grove.idle();
+  const missed = day(t - 24 * 3600 * 1000);
+  assert.match(f.files[`crystal/diary/${missed}.md`], /No diary was written for this day/, 'the missed day is on GitHub');
+  assert.ok(f.files[`ruby/diary/${day(t)}.md`], 'today is on GitHub for ruby too');
+  assert.equal(f.files[`ruby/diary/${missedDay}.md`], 'A real diary, written earlier.', 'an existing diary is kept');
+  grove.close();
+});
+
+test('a koala can make up to makesPerDay things in a day, each in its own folder', async () => {
+  const { grove, f, calls } = makingGrove({ makesPerDay: 3, brain: (req, n) => ({ ok: true, raw: game({ title: `Thing ${n}`, kind: 'Game' }), usage }) });
+  await grove.publishNow();
+  assert.equal(calls.filter((c) => c.kind === 'make' && c.koala === 'crystal').length, 3);
+  for (const n of [1, 2, 3]) assert.ok(f.files[`crystal/makes/thing-${n}/README.md`], `thing ${n} is on GitHub`);
   grove.close();
 });

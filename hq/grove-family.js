@@ -8,6 +8,9 @@ export const NEST_WINDOW = 120; // grove minutes: both must choose to nest withi
 export const GESTATION = 1440; // grove minutes: one grove day
 export const GRADUATE_AT = 45; // strength at which a baby starts deciding for itself
 export const BABY_NAMES = ['Pip', 'Wattle', 'Gumnut', 'Sky'];
+export const CAKE_DAY = 100; // the grove day the koalas get a big cake
+export const CAKE_FROM = 'Casper and Simon';
+export const cakeMemory = () => `${CAKE_FROM} gave you a big cake to celebrate day ${CAKE_DAY} of the grove!`;
 const LOVE = 80;
 
 const TRAITS = {
@@ -30,7 +33,7 @@ export function canNest(world, a, b) {
   return { ok: true, why: '' };
 }
 
-const partnerOf = (world, id) => (world.koalas[id]?.parents ? null : KOALAS.find((k) => k.id !== id)?.id);
+const partnerOf = (world, id) => (world.koalas[id]?.parents ? null : KOALAS.find((k) => k.id !== id && world.koalas[k.id])?.id);
 
 // A koala chooses to nest at grove minute `now`. Returns { refused: why } | { pending: true } | { conceived: true }.
 export function nestStep(world, id, now) {
