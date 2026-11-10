@@ -395,3 +395,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .dash-overview .dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .dash-overview .ddrive { display: grid; grid-template-columns: 96px 1fr; gap: 8px; align-items: center; margin: 4px 0; }
 .dash-overview .dlist li .k { margin: 0 4px; opacity: 0.7; font-size: 0.85em; }
+
+/* Trace: model calls and why they were made */
+.dash-box h4 { margin: 10px 0 6px; font-size: 0.9em; opacity: 0.85; }
+.dtable { width: 100%; border-collapse: collapse; font-size: 0.8em; }
+.dtable th, .dtable td { text-align: left; padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); vertical-align: top; }
+.dtable th { opacity: 0.7; font-weight: 600; }

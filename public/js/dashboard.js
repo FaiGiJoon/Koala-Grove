@@ -30,6 +30,7 @@ export function createDashboard({ api }) {
   const btn = $('#dash-btn');
   let state = null;
   let data = null;
+  let system = null;
   let timer = null;
   let exporting = false;
   let showSetup = false;
@@ -56,6 +57,8 @@ export function createDashboard({ api }) {
   async function refresh() {
     try {
       data = await api.dashboard();
+      // this computer and the local model server, read on each refresh (null if unreachable)
+      system = await fetch('/api/system', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
       draw();
     } catch (err) {
       $('#dash-sub').textContent = `Could not load: ${err.message}`;
@@ -208,6 +211,31 @@ export function createDashboard({ api }) {
       : '<div class="dline">All quiet. No problems.</div>'}${showSetup && !data?.google?.configured ? setupHelp() : ''}`;
   }
 
+  // Trace: this computer, the local model server, and every model call with why it was made and what it chose.
+  function traceBox() {
+    const h = system?.host;
+    const o = system?.ollama;
+    const host = h
+      ? `<div class="dline"><b>Computer</b>: ${esc(h.platform)} · ${h.cpuCount} CPUs (${esc(h.cpuModel)}) · load ${h.loadAvg.join(' / ')} · memory ${h.memUsedPct}% of ${h.memTotalGb} GB</div>`
+      : '<div class="dline">Computer status unavailable.</div>';
+    const ollama = !o?.enabled
+      ? '<div class="dline"><b>Local model (Ollama)</b>: off</div>'
+      : o.reachable
+        ? `<div class="dline"><b>Local model (Ollama ${esc(o.version ?? '?')})</b>: ${o.installed.length} installed · loaded now: ${o.loaded.length
+            ? o.loaded.map((m) => `${esc(m.name)} (${m.sizeGb} GB, ${m.gpuGb} GB in GPU)`).join(', ')
+            : 'none'}</div>`
+        : `<div class="dline"><b>Local model (Ollama)</b>: not reachable (${esc(o.error ?? '')})</div>`;
+    const calls = data?.calls ?? [];
+    const rows = calls.length
+      ? `<table class="dtable"><thead><tr><th>Time</th><th>Koala</th><th>Call</th><th>Why it was made</th><th>Chose</th><th>Tokens</th><th>Cost</th><th>Result</th></tr></thead><tbody>${calls.map((c) => `<tr>
+          <td>${time(c.ts)}</td><td>${esc(state.koalas.find((k) => k.id === c.koala)?.name ?? c.koala ?? '')}</td>
+          <td>${esc(c.kind ?? 'decide')}</td><td>${esc(c.reason ?? (c.kind === 'decide' || !c.kind ? '' : 'read or research on purpose'))}</td>
+          <td>${esc(c.action ?? '')}</td><td>${fmtTokens((c.tokens_in ?? 0) + (c.tokens_out ?? 0))}${c.prompt_chars ? ` · prompt ${c.prompt_chars} chars` : ''}</td>
+          <td>${fmtUsd(c.cost_usd ?? 0)}</td><td>${c.ok ? 'ok' : 'failed'} · ${Math.round((c.duration_ms ?? 0) / 100) / 10} s</td></tr>`).join('')}</tbody></table>`
+      : '<div class="dline">No model calls yet.</div>';
+    $('#dash-trace').innerHTML = `<h3>Trace</h3>${host}${ollama}<h4>Model calls and why</h4>${rows}`;
+  }
+
   function feedBox() {
     const name = (id) => state.koalas.find((k) => k.id === id)?.name ?? '';
     const rows = data?.feed ?? [...state.log].reverse();
@@ -222,6 +250,7 @@ export function createDashboard({ api }) {
     usageBox();
     habitsBox();
     problemsBox();
+    traceBox();
     feedBox();
     googleLine();
   }

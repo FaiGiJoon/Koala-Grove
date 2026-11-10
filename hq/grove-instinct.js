@@ -338,7 +338,7 @@ export function instinctDecide(world, id, clock = { phase: 'day' }, rng = Math.r
   const traits = (TRAITS[k.id] ?? []).filter((x) => !(k.traits ?? []).includes(x));
   const trait = traits.length && rng() < 0.01 && stageOf(k.strength).id !== 'baby' ? pick(traits, rng) : '';
   return {
-    thought: '', target: '', say: '', remember: '', bond: 0, opinion, build_name: '', build_design: '', wish, trait,
+    thought: '', target: '', say: '', remember: '', bond: 0, opinion, build_name: '', build_design: '', creation: '', wish, trait,
     ...best,
   };
 }

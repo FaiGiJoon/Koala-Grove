@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { systemStatus } from './grove-system.js';
 
 const MAX_BODY = 16 * 1024;
 const PING_MS = 25000;
@@ -174,6 +175,7 @@ export function createApp({ grove, publicDir, google = null, publicHosts = [] })
     }
     if (pathname === '/api/dashboard' || pathname.startsWith('/api/google/')) return owner(req, res, pathname, query, port);
     if (pathname === '/api/grove' && method === 'GET') return sendJson(res, 200, grove.state());
+    if (pathname === '/api/system' && method === 'GET') return sendJson(res, 200, await systemStatus({ ollamaUrl: grove.config.ollamaUrl }));
     if (method === 'POST') {
       if (pathname === '/api/grove/play') return sendJson(res, 200, grove.play());
       if (pathname === '/api/grove/pause') return sendJson(res, 200, grove.pause());

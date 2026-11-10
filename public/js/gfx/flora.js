@@ -41,8 +41,8 @@ export function bladeGeometry() {
   const idx = [];
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;
-    const w = 0.05 * (1 - t * 0.75); // a blunter tip, so near blades do not read as spikes
-    const z = 0.18 * t * t;
+    const w = 0.026 * (1 - t * 0.8); // slim blades with a soft tip: clumps read as grass, not as spikes
+    const z = 0.1 * t * t;
     const g = 0.4 + 0.6 * t;
     if (i < segs) {
       pos.push(-w, t, z, w, t, z);
@@ -95,7 +95,7 @@ export function buildGrass({ terrain, capacity, seed = 12 }) {
       const x = cx + (r() - 0.5) * 0.8;
       const z = cz + (r() - 0.5) * 0.8;
       if (terrain.pathMask(x, z) > 0.55 || terrain.height(x, z) < WATER_Y + 0.03) continue;
-      const hgt = (0.26 + r() * 0.42) * (0.8 + 0.4 * Math.sin(x * 0.4) * Math.cos(z * 0.35));
+      const hgt = (0.2 + r() * 0.3) * (0.8 + 0.4 * Math.sin(x * 0.4) * Math.cos(z * 0.35));
       e.set((r() - 0.5) * 0.4, r() * TAU, (r() - 0.5) * 0.4);
       q.setFromEuler(e);
       s.set(0.9 + r() * 0.7, hgt, 0.9 + r() * 0.7);

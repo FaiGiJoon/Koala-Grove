@@ -13,11 +13,12 @@ import { BuildLayer } from './gfx/builds.js';
 import { gradeAt } from './gfx/grade.js';
 import { Critters } from './gfx/critters.js';
 import { buildTextures } from './gfx/textures.js';
+import { CreationLayer } from './gfx/creations.js';
 import { makeTerrain, bushlandSpots, ISLAND, SHORE_R, WATER_Y } from './gfx/terrain-math.js';
 import { SETTINGS, pickInitialTier, parseQuality, ladder, Governor } from './gfx/quality.js';
 import { shared, groundMaterial, waterMaterial, RIPPLES } from './gfx/materials.js';
 import { Sky } from './gfx/sky.js';
-import { buildSplat, buildLawn, buildCliff, buildRoots, buildIslet } from './gfx/terrain.js';
+import { buildSplat, buildLawn, buildIslet } from './gfx/terrain.js';
 import { buildGrass, eucalypt, treeMeshes, leafMaterials, rockGeometry, rockMaterial, fernMesh, bushShape, flowerMeshes } from './gfx/flora.js';
 import { buildProps, buildMounds, animatePond } from './gfx/props.js';
 import { Effects, buildAmbient } from './gfx/particles.js';
@@ -144,6 +145,7 @@ export class GroveScene {
     lap('sky');
     this.#world(rand, S, lap);
     this.buildLayer = new BuildLayer({ scene: this.scene, tex: this.tex, baseY: (x, z) => T.height(x, z), island: ISLAND });
+    this.creations = new CreationLayer({ scene: this.scene });
     this.#buildKoalas(koalas);
     this.critters = new Critters({ scene: this.scene, groundY: this.groundY, places });
     lap('koalas');
@@ -385,11 +387,21 @@ export class GroveScene {
     const gMat = groundMaterial({ tex, splat, island: ISLAND });
     this.ground = buildLawn({ terrain: T, rings: S.terrainRings, segs: S.terrainSegs, material: gMat });
     group.add(this.ground);
-    const rockCliff = new THREE.MeshStandardMaterial({ map: tex.rock.map, normalMap: tex.rock.normal, normalScale: new THREE.Vector2(1.4, 1.4), vertexColors: true, roughness: 0.96 });
-    group.add(buildCliff({ rings: 36, segs: S.terrainSegs, material: rockCliff }));
-    const rootMat = new THREE.MeshStandardMaterial({ map: tex.bark.map, normalMap: tex.bark.normal, color: '#7a5a3e', vertexColors: true, roughness: 0.95 });
-    group.add(buildRoots({ material: rootMat }));
-    lap('lawn+cliff');
+    // No cliff and no hanging roots: the lawn runs out onto a wide meadow that reaches the horizon,
+    // so the grove sits on the land instead of floating above it.
+    const meadowMap = tex.grass.map.clone();
+    meadowMap.repeat.set(160, 160);
+    meadowMap.needsUpdate = true;
+    const meadowNormal = tex.grass.normal.clone();
+    meadowNormal.repeat.set(160, 160);
+    meadowNormal.needsUpdate = true;
+    const meadowMat = new THREE.MeshStandardMaterial({ map: meadowMap, normalMap: meadowNormal, color: '#7f9a5a', roughness: 0.97 });
+    const meadow = new THREE.Mesh(new THREE.CircleGeometry(1400, 128), meadowMat);
+    meadow.rotation.x = -Math.PI / 2;
+    meadow.position.y = -0.95;
+    meadow.receiveShadow = true;
+    group.add(meadow);
+    lap('lawn+meadow');
     this.grass = buildGrass({ terrain: T, capacity: HIGH.grass });
     group.add(this.grass);
     lap('grass');
@@ -698,6 +710,7 @@ export class GroveScene {
     this.state = state;
     this.places = state.places;
     this.buildLayer.sync(state);
+    this.creations.sync(state.creations);
     this.#ticketBoard((state.tickets ?? []).filter((t) => t.status === 'open').length);
     this.clockFrac = state.clock.frac;
     this.clockDay = state.clock.day;
