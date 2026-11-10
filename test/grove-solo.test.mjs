@@ -93,3 +93,40 @@ test('a fourth wish while three tickets are open is kept but files no ticket', a
   assert.equal(grove.tickets.list().length, 3);
   assert.equal(grove.world.koalas.ruby.wish, 'Make a bridge');
 });
+
+test('every model call records why it was made and what it chose', async () => {
+  let t = Date.UTC(2026, 10, 10, 12);
+  const usage = { cost_usd: 0.002, tokens_in: 1500, tokens_out: 80, duration_ms: 900 };
+  const brain = async () => ({ ok: true, raw: { action: 'sit', say: '', mood: 'content' }, usage });
+  const grove = new Grove({ path: ':memory:', config: { cast: ['ruby'], dayUsd: 1, brain: 'claude' }, think: brain, now: () => t, rng: () => 0.5 });
+  grove.play();
+  t += 70000;
+  grove.heartbeat();
+  grove.tick();
+  await grove.idle();
+  const [call] = grove.dashboard().calls;
+  assert.ok(call, 'a model call was recorded');
+  assert.equal(call.kind, 'decide');
+  assert.equal(call.action, 'sit');
+  assert.match(call.reason, /claude brain/);
+  assert.ok(call.prompt_chars > 100);
+});
+
+test('a koala invents a creation and it is built in the open field', async () => {
+  let t = Date.UTC(2026, 10, 10, 12);
+  const usage = { cost_usd: 0.002, tokens_in: 1500, tokens_out: 80, duration_ms: 900 };
+  const creation = { name: 'Red Unicorn Town Hall', parts: [{ shape: 'box', size: [3, 2, 3], at: [0, 1, 0], color: '#c23b3b' }, { shape: 'sphere', size: [1, 1, 1], at: [0, 3, 0], color: '#ffffff' }] };
+  const brain = async () => ({ ok: true, raw: { action: 'sit', say: '', mood: 'content', creation }, usage });
+  const grove = new Grove({ path: ':memory:', config: { cast: ['ruby'], dayUsd: 1, brain: 'claude' }, think: brain, now: () => t, rng: () => 0.5 });
+  grove.play();
+  t += 70000;
+  grove.heartbeat();
+  grove.tick();
+  await grove.idle();
+  const st = grove.state();
+  assert.equal(st.creations.length, 1);
+  assert.equal(st.creations[0].name, 'Red Unicorn Town Hall');
+  assert.equal(st.creations[0].koala, 'ruby');
+  assert.equal(st.creations[0].parts.length, 2);
+  assert.ok(st.log.some((e) => e.kind === 'creation'), 'the creation is in the log');
+});

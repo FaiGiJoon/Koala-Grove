@@ -12,7 +12,7 @@ export const DRIVES = ['rest', 'curiosity', 'social', 'expression', 'quiet'];
 // How fast each drive builds up per real minute, by koala. Babies grow up with the mix.
 const RATES = {
   crystal: { curiosity: 0.014, social: 0.010, expression: 0.010, quiet: 0.004 },
-  ruby: { curiosity: 0.009, social: 0.008, expression: 0.006, quiet: 0.010 },
+  ruby: { curiosity: 0.013, social: 0.008, expression: 0.011, quiet: 0.010 },
   mixed: { curiosity: 0.012, social: 0.012, expression: 0.008, quiet: 0.006 },
 };
 
@@ -92,7 +92,7 @@ export function satisfy(k, d, ctx = {}) {
   const ease = (drive, by) => { dv[drive] = clamp01(dv[drive] - by); };
   const press = (drive, by) => { dv[drive] = clamp01(dv[drive] + by); };
   switch (d.action) {
-    case 'read': case 'research': ease('curiosity', 0.5); press('quiet', -0.1); break;
+    case 'read': case 'research': ease('curiosity', 0.35); press('quiet', -0.1); break;
     case 'move': if (ctx.explored) ease('curiosity', 0.2); break;
     case 'approach': case 'give': ease('social', 0.4); press('quiet', 0.05); break;
     case 'play': ease('expression', 0.3); if (ctx.together) ease('social', 0.2); break;

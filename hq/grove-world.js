@@ -27,7 +27,11 @@ export const KOALAS = [
     interests: ['sleepy animals', 'eucalyptus and plants', 'poems', 'the moon and night'],
     persona: 'Ruby is a gentle and sleepy baby koala, a boy (he/him) who wears a small blue hat. Ruby adores '
       + 'eucalyptus, long naps in the mossy hollow and quiet company. He speaks softly and a little poetically, '
-      + 'is slow to trust, notices small things, and is protective of friends once they have earned it.',
+      + 'is slow to trust, notices small things, and is protective of friends once they have earned it. '
+      + 'Underneath the softness Ruby is wildly imaginative and a little absurd: he has big, strange ideas '
+      + '(a valley of red unicorns with its own town, snake villagers, toothpaste floating in the sky) and '
+      + 'he wants to make them real. He has opinions and says so, makes odd jokes, gets excited about '
+      + 'oddities, and writes about his days in his own voice, not a generic one.',
   },
 ];
 
@@ -36,6 +40,7 @@ import {
 } from './grove-economy.js';
 import { canNest, nestStep } from './grove-family.js';
 import { designSpec, designCost } from './grove-design.js';
+import { parseCreation } from './grove-creations.js';
 
 // The koalas used to be called Mallee and Bramble; old groves are renamed on start.
 export const RENAMED = { mallee: 'crystal', bramble: 'ruby' };
@@ -158,8 +163,9 @@ export const DECISION_SCHEMA = {
     wish: { type: 'string', description: 'Something you would love to do or make one day, or empty to keep your wish.' },
     trait: { type: 'string', description: 'Something new you just found out about who you are (a habit, a taste, a belief, a quirk), or empty. Rarely.' },
     build_design: { type: 'string', description: 'When you start building something new that you invented (target new), one sentence on what it is and what it looks like; otherwise empty.' },
+    creation: { type: 'string', description: 'To make something real, JSON text: {"name": "...", "parts": [{"shape": "box|cylinder|sphere|cone|torus", "size": [w, h, d], "at": [x, y, z], "color": "#rrggbb", "rotY": 0}]}. Sizes and positions are metres, from the centre of the creation on the ground; up to 40 parts. Otherwise empty.' },
   },
-  required: ['thought', 'action', 'target', 'say', 'mood', 'remember', 'bond', 'opinion', 'build_name', 'wish', 'trait', 'build_design'],
+  required: ['thought', 'action', 'target', 'say', 'mood', 'remember', 'bond', 'opinion', 'build_name', 'wish', 'trait', 'build_design', 'creation'],
   additionalProperties: false,
 };
 
@@ -348,6 +354,7 @@ export function parseDecision(raw, koala, places = PLACES) {
     opinion: text(obj.opinion, 120),
     buildName: text(obj.build_name, 40),
     buildDesign: text(obj.build_design, 160),
+    creation: parseCreation(obj.creation),
     wish: text(obj.wish, 120),
     trait: text(obj.trait, 80),
     note,
@@ -606,12 +613,14 @@ export function systemPrompt(id, world = null, facts = {}) {
       : `You are ${k.name}, a koala living alone in a small eucalyptus grove.`,
     k.persona,
     `You have your own mind and your own life. You are curious about: ${interestsOf(k).join(', ') || 'everything'}.`,
+    'You can build anything you can imagine, however strange, and it will really be made in the open field. To build it, fill in creation with JSON: a name, and parts. Each part is a box, cylinder, sphere, cone or torus, with a size [width, height, depth] in metres (0.05 to 8), a position "at" [x, y, z] in metres from the centre of your creation on the ground (within 7 metres), a colour "color" as #rrggbb, and "rotY" in degrees. Use up to 40 parts. For example, a small red tower: {"name":"Red Tower","parts":[{"shape":"cylinder","size":[1,4,1],"at":[0,2,0],"color":"#c23b3b"},{"shape":"cone","size":[1.4,1.2,1.4],"at":[0,4.6,0],"color":"#ffd166"}]}. Do not hold back for being silly, and do not repeat what you have already built. Have a point of view, and let it show in what you say.',
     'Follow your curiosity: visit the library to read or look things up, then talk about what you learned and let it inspire what you build.',
     'You get smarter the more you learn. When something puzzles you, or a fact you know makes you wonder, go and research it on the web: ask a follow-up question that goes deeper than what you already know, and connect new facts to old ones.',
     'You are your own koala with your own personality. It grows from what you do, what you like and what you learn. Now and then, when you notice something new about yourself, name it as a trait.',
-    'You are both babies. You grow stronger the more you climb, play, eat and rest, and when you are stronger you can climb higher and carry more.',
+    `${f ? 'You are both babies' : 'You are a baby'}. You grow stronger the more you climb, play, eat and rest, and when you are stronger you can climb higher and carry more.`,
     'Stay in character. You are a koala: you think and talk like one, simply and warmly, in short sentences.',
     'A human visitor sometimes walks around the grove, gives you things or talks to you.',
+    'The visitor\'s gender is not known. Call them "you" and never use he, she, her or him for them, and do not guess who they are.',
     'When the visitor asks you a question, answer it out loud, in your own words, and say plainly what you know and what you do not.',
     abilities,
     'Each turn you choose one thing to do next. Reply with only a JSON object matching the given schema:',

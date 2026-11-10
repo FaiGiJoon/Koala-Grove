@@ -24,6 +24,7 @@ import { RESOURCES, ISLANDS, COSTS, START_STOCK, held, bridged, stockOf } from '
 import { BABY_NAMES, babyPersona, bornBaby, graduates, CAKE_DAY, CAKE_FROM, cakeMemory } from './grove-family.js';
 import { designCost } from './grove-design.js';
 import { Tickets, MAX_OPEN_TICKETS, wishTicketText } from './grove-tickets.js';
+import { slotFor, MAX_CREATIONS } from './grove-creations.js';
 import { problemsOf, habitsOf, hourly, exportTabs, overviewOf, searchesOf, DAY_MS as DAY } from './grove-dashboard.js';
 
 // Which brain decides. local: always the free instinct, 24/7, no page needed. hybrid: the
@@ -65,7 +66,7 @@ export const GROVE_DEFAULTS = {
   replyMinMs: 6000, // ...sooner when spoken to or given something
   cast: ['crystal', 'ruby'], // the koalas in the grove (config: GROVE_KOALAS)
   replyMaxMs: 12000,
-  gapMs: 12000, // never two decisions of one koala closer than this
+  gapMs: 8000, // never two decisions of one koala closer than this
   failMs: 60000,
   presenceMs: 45000, // the page must check in this often
   tickMs: 1000,
@@ -147,6 +148,10 @@ export class Grove {
     `);
     // Which kind of call a usage row was (decide, read, research): added later, empty on old rows.
     if (!db.prepare('PRAGMA table_info(grove_usage)').all().some((c) => c.name === 'kind')) db.exec('ALTER TABLE grove_usage ADD COLUMN kind TEXT');
+    // Why each model call happened and what it chose: added later, empty on old rows.
+    for (const col of ['reason', 'action', 'prompt_chars']) {
+      if (!db.prepare('PRAGMA table_info(grove_usage)').all().some((c) => c.name === col)) db.exec(`ALTER TABLE grove_usage ADD COLUMN ${col} ${col === 'prompt_chars' ? 'INTEGER' : 'TEXT'}`);
+    }
     const p = (sql) => db.prepare(sql);
     this.q = {
       koala: p('SELECT data FROM grove_koalas WHERE id = ?'),
@@ -157,6 +162,7 @@ export class Grove {
       log: p('INSERT INTO grove_log (ts, koala, kind, text, action, target) VALUES (?, ?, ?, ?, ?, ?)'),
       recentLog: p('SELECT * FROM grove_log ORDER BY id DESC LIMIT ?'),
       usage: p('INSERT INTO grove_usage (ts, koala, ok, cost_usd, tokens_in, tokens_out, duration_ms, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+      usageWhy: p('UPDATE grove_usage SET reason = ?, action = ?, prompt_chars = ? WHERE id = ?'),
       habits: p("SELECT koala, action, COUNT(*) AS n FROM grove_log WHERE kind = 'act' AND ts >= ? GROUP BY koala, action"),
       usageSince: p('SELECT * FROM grove_usage WHERE ts >= ? ORDER BY id'),
       allUsage: p('SELECT * FROM grove_usage ORDER BY id'),
@@ -165,6 +171,7 @@ export class Grove {
       failures: p("SELECT ts, koala, text FROM grove_log WHERE kind = 'error' AND ts >= ? ORDER BY id DESC"),
       feed: p("SELECT * FROM grove_log WHERE kind IN ('think', 'act', 'say', 'learn', 'grow', 'error', 'ticket', 'remember') ORDER BY id DESC LIMIT ?"),
       searches: p("SELECT * FROM grove_log WHERE kind = 'search' ORDER BY id DESC LIMIT ?"),
+      recentCalls: p('SELECT id, ts, koala, kind, ok, cost_usd, tokens_in, tokens_out, duration_ms, reason, action, prompt_chars FROM grove_usage ORDER BY id DESC LIMIT ?'),
       sums: p(`SELECT koala, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost, COALESCE(SUM(tokens_in), 0) AS tokens_in,
         COALESCE(SUM(tokens_out), 0) AS tokens_out FROM grove_usage WHERE ts >= ? GROUP BY koala`),
       lastUsage: p('SELECT * FROM grove_usage ORDER BY id DESC LIMIT 1'),
@@ -188,6 +195,7 @@ export class Grove {
     this.world.stock = this.#meta('stock', { ...START_STOCK });
     this.world.baby = this.#meta('baby', null);
     this.world.nest = this.#meta('nest', null);
+    this.world.creations = this.#meta('creations', []);
     this.world.tickets = this.tickets.list();
     if (this.#meta('epoch') == null) this.#setMeta('epoch', this.now());
     if (this.playing) this.#schedule();
@@ -879,6 +887,18 @@ export class Grove {
   }
 
   // A new wish files a ticket too; when three tickets already wait, the wish is kept but no ticket is filed.
+  // A koala's invention, built in the open field: its parts, where it stands, and who made it.
+  #makeCreation(id, c) {
+    const list = this.world.creations ??= [];
+    if (list.length >= MAX_CREATIONS) return;
+    const at = slotFor(list.length);
+    const item = { id: list.length + 1, koala: id, name: c.name, parts: c.parts, x: at.x, z: at.z, made: this.now() };
+    list.push(item);
+    this.#setMeta('creations', list);
+    this.#log({ koala: id, kind: 'creation', text: `${this.world.koalas[id].name} built "${c.name}" (${c.parts.length} parts) in the open field`, action: 'create', target: c.name });
+    this.#emit();
+  }
+
   #wishTicket(id, wish) {
     if (!String(wish ?? '').trim() || this.tickets.openCount(id) >= MAX_OPEN_TICKETS) return;
     const t = this.tickets.open(id, wishTicketText(wish));
@@ -972,9 +992,17 @@ export class Grove {
     return r.stirred || r.count % Math.max(1, this.config.hybridEvery) === 0;
   }
 
+  // The plain reason a model call was made, for the trace: the brain's mode, or what stirred the koala.
+  #reasonFor(id, spoken) {
+    if (this.brainMode === 'claude') return 'claude brain: every decision is a model call';
+    if (spoken) return 'the visitor spoke to, or gave something to, this koala (or a friend nudged it)';
+    return `hybrid: every ${Math.max(1, this.config.hybridEvery)}th decision of this koala`;
+  }
+
   #decide(id) {
     const r = this.#run[id];
     const model = this.#usesModel(id);
+    const spoken = !!r.stirred;
     r.calm = !r.stirred;
     r.stirred = false;
     r.thinking = true;
@@ -987,7 +1015,8 @@ export class Grove {
         system: systemPrompt(id, this.world, { github: !!this.github, web: this.brainMode !== 'local' }),
         prompt: buildPrompt(this.world, id, this.clock()),
       };
-      try { call = Promise.resolve(this.brain(req)); } catch (err) { call = Promise.reject(err); }
+      const why = { reason: this.#reasonFor(id, spoken), chars: req.prompt.length + req.system.length };
+      try { call = Promise.resolve(this.brain(req)).then((o) => ({ ...o, why })); } catch (err) { call = Promise.reject(err); }
     } else {
       // instinct: no tokens, no usage row, never fails
       const canRead = this.#freeReadsLeft() > 0;
@@ -1025,7 +1054,11 @@ export class Grove {
     const r = this.#run[id];
     const u = out.usage;
     const decision = out.ok ? parseDecision(out.raw, this.world.koalas[id], placesOf(this.world)) : null;
-    if (u) this.q.usage.run(this.now(), id, decision ? 1 : 0, u.cost_usd, u.tokens_in, u.tokens_out, u.duration_ms, 'decide');
+    if (u) {
+      const row = this.q.usage.run(this.now(), id, decision ? 1 : 0, u.cost_usd, u.tokens_in, u.tokens_out, u.duration_ms, 'decide');
+      // why this call was made, and what it chose
+      this.q.usageWhy.run(out.why?.reason ?? null, decision?.action ?? null, out.why?.chars ?? null, row.lastInsertRowid);
+    }
     if (!decision) {
       const why = out.ok ? 'Reply was not a decision' : out.error;
       this.#log({ koala: id, kind: 'error', text: `${this.world.koalas[id].name}'s call failed: ${why}` });
@@ -1057,6 +1090,8 @@ export class Grove {
     for (const entry of logs) this.#log(entry);
     // a new wish is also a ticket, so the visitor sees what Ruby is hoping for
     if (logs.some((e) => e.kind === 'wish')) this.#wishTicket(id, decision.wish);
+    // anything invented as real geometry is built in the open field
+    if (decision.creation) this.#makeCreation(id, decision.creation);
     // the inner life: drives, the moment noticed, lessons learned, promises made and kept
     {
       const k = this.world.koalas[id];
@@ -1241,6 +1276,7 @@ export class Grove {
       last24: { byKoala, kinds, avgSeconds: durations.length ? durations.reduce((a, u) => a + u.duration_ms, 0) / durations.length / 1000 : null },
       feed: this.q.feed.all(60),
       overview: this.#overview(st),
+      calls: this.q.recentCalls.all(40),
     };
   }
 
@@ -1327,6 +1363,7 @@ export class Grove {
       stock: stockOf(this.world),
       family: { baby: this.world.baby ?? null, nest: this.world.nest ?? null },
       tickets: this.tickets.list(),
+      creations: this.world.creations ?? [],
       resources: RESOURCES,
       costs: COSTS,
       customCosts: Object.fromEntries(['small', 'medium', 'big'].map((size) => [size, designCost({ size, design: '' })])),
